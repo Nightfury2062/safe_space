@@ -23,6 +23,8 @@ from open_locker_demo import WrongPinOrTampered
 from vault import Vault, WrongMasterPassword, default_vault_path, read_import_csv
 
 APP = "SafeSpace"
+VERSION = "0.1"
+NOTICE = "Course prototype (Usable Security, IIIT Delhi). Not audited: do not store real passwords."
 CATEGORIES = ["Email", "Social", "Banking", "Shopping", "Work", "Entertainment", "Other"]
 ATTENTION = "Needs attention"
 ALL = "All items"
@@ -641,7 +643,9 @@ class SetupScreen(ttk.Frame):
         ttk.Label(card, text="Welcome to SafeSpace", style="Big.TLabel", font=(FONT, 20, "bold")).pack(anchor="w")
         ttk.Label(card, style="Card.TLabel", wraplength=420, justify="left",
                   text="SafeSpace remembers your passwords in an encrypted vault on this computer. "
-                       "You only need to remember one password: your master password.").pack(anchor="w", pady=(6, 18))
+                       "You only need to remember one password: your master password.").pack(anchor="w", pady=(6, 8))
+        ttk.Label(card, text="⚠ " + NOTICE, style="Card.TLabel", foreground=WARN_FG, wraplength=420,
+                  justify="left").pack(anchor="w", pady=(0, 14))
         self.form = NewMasterForm(card)
         self.form.pack(anchor="w")
         ttk.Label(card, style="CardMuted.TLabel", wraplength=420,
@@ -1074,7 +1078,7 @@ class HomeScreen(ttk.Frame):
 class App(tk.Tk):
     def __init__(self, vault_path, demo_hint=""):
         super().__init__()
-        self.title(APP)
+        self.title(f"{APP} {VERSION} — course prototype")
         self.geometry("1180x720")
         self.minsize(980, 600)
         setup_styles(self)
@@ -1103,7 +1107,7 @@ class App(tk.Tk):
         self.status("")
 
     def status(self, msg):
-        self.statusbar.configure(text=msg)
+        self.statusbar.configure(text=msg or NOTICE)
 
     # ---- security helpers
     def copy(self, text, what):

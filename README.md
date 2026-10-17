@@ -1,5 +1,8 @@
 # SafeSpace — desktop password manager prototype
 
+> **Course prototype** for the Usable Security course at IIIT Delhi. It has not had an independent
+> security review. Use the demo mode for testing and **do not store real passwords** in it.
+
 Prototype for the SafeSpace usability study (see `../Usability Study Interview Guide.pdf`).
 
 ## Quick start (Windows)
