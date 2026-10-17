@@ -1,0 +1,12 @@
+# Build output (rebuild with PyInstaller, see README)
+dist/
+build/
+*.spec
+__pycache__/
+*.pyc
+
+# Vault files: never commit real or demo vaults, exports or recovery keys
+*.json
+*.safespace
+*.csv
+*recovery-key*.txt
