@@ -126,6 +126,28 @@ class VaultTests(unittest.TestCase):
         self.assertGreaterEqual(passgen.strength(passgen.generate_password())[0], 3)
         self.assertTrue(passgen.is_weak(passgen.strength("Summer2024!")[0]))
 
+    def test_biometric_unlock(self):
+        self.assertFalse(self.v.has_biometric)
+        self.assertFalse(Vault.is_biometric_enabled(self.path))
+        bio_key = os.urandom(32)
+        self.v.enable_biometric(bio_key)
+        self.assertTrue(self.v.has_biometric)
+        self.assertTrue(Vault.is_biometric_enabled(self.path))
+
+        # Unlock with correct biometric key
+        v2 = Vault.unlock_with_biometric(self.path, bio_key)
+        self.assertEqual(len(v2.items), len(self.v.items))
+
+        # Unlock with wrong biometric key
+        with self.assertRaises(WrongMasterPassword):
+            Vault.unlock_with_biometric(self.path, os.urandom(32))
+
+        # Disable biometric
+        v2.disable_biometric()
+        self.assertFalse(v2.has_biometric)
+        self.assertFalse(Vault.is_biometric_enabled(self.path))
+
+
 
 if __name__ == "__main__":
     unittest.main()

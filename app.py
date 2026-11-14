@@ -10,6 +10,7 @@ Requires: pip install argon2-cffi pynacl cryptography
 
 import argparse
 import os
+import secrets
 import sys
 import time
 import tkinter as tk
@@ -18,6 +19,11 @@ from contextlib import contextmanager
 from datetime import datetime
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
+import cv2
+import numpy as np
+from PIL import Image, ImageTk
+
+import face_auth
 import passgen
 from open_locker_demo import WrongPinOrTampered
 from vault import Vault, WrongMasterPassword, default_vault_path, read_import_csv
@@ -521,6 +527,249 @@ def do_import(app):
             messagebox.showerror(APP, f"Couldn't delete the file: {e}", parent=app)
 
 
+class FaceEnrollDialog(Dialog):
+    """Camera modal to capture reference face embeddings and set up Face ID."""
+
+    def __init__(self, parent, vault):
+        super().__init__(parent, "Enroll Face ID")
+        self.vault = vault
+        self.cap = None
+        self._job = None
+        self.samples = []
+        self.needed = 5
+        self.success = False
+
+        b = self.body
+        ttk.Label(b, text="Set up Face ID", style="H2.TLabel").pack(anchor="w", pady=(0, 4))
+        ttk.Label(b, text="Look directly at the camera with good lighting. Hold still while SafeSpace captures your face profile.",
+                  style="CardMuted.TLabel", wraplength=380).pack(anchor="w", pady=(0, 10))
+
+        self.canvas = tk.Canvas(b, width=360, height=270, bg="#1a1d24", highlightthickness=0)
+        self.canvas.pack(pady=(0, 10))
+
+        self.progress = ttk.Progressbar(b, maximum=self.needed, length=360)
+        self.progress.pack(pady=(0, 8))
+
+        self.status_lbl = ttk.Label(b, text="Starting camera...", style="Card.TLabel", font=(FONT, 10, "bold"))
+        self.status_lbl.pack(anchor="center", pady=(0, 12))
+
+        btns = ttk.Frame(b, style="Card.TFrame")
+        btns.pack(fill="x")
+        ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="right")
+
+        self.bind("<Destroy>", self._cleanup)
+        self.after(200, self._start_camera)
+
+    def _start_camera(self):
+        try:
+            self.cap = cv2.VideoCapture(0)
+            if not self.cap or not self.cap.isOpened():
+                self.status_lbl.configure(text="Could not open camera. Please check your webcam.", foreground=BAD_FG)
+                return
+            self._tick()
+        except Exception as e:
+            self.status_lbl.configure(text=f"Camera error: {e}", foreground=BAD_FG)
+
+    def _tick(self):
+        if not self.cap or not self.cap.isOpened():
+            return
+        ret, frame = self.cap.read()
+        if not ret or frame is None:
+            self._job = self.after(30, self._tick)
+            return
+
+        frame = cv2.flip(frame, 1)
+        engine = face_auth.get_engine()
+        res = engine.process_frame(frame)
+
+        display_frame = frame.copy()
+        if res["ok"]:
+            bbox = res["bbox"]
+            cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 220, 100), 2)
+            self.samples.append(res["embedding"])
+            self.progress.configure(value=len(self.samples))
+            self.status_lbl.configure(
+                text=f"Face detected! Hold still... ({len(self.samples)}/{self.needed})",
+                foreground=GOOD_FG,
+            )
+            if len(self.samples) >= self.needed:
+                self._render(display_frame)
+                self._stop_camera()
+                self.after(300, self._finish_enrollment)
+                return
+        else:
+            if res.get("bbox"):
+                bbox = res["bbox"]
+                cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 180, 255), 2)
+            self.status_lbl.configure(text=res["msg"], foreground=WARN_FG)
+
+        self._render(display_frame)
+        self._job = self.after(40, self._tick)
+
+    def _render(self, display_frame):
+        rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
+        img = Image.fromarray(rgb).resize((360, 270), Image.Resampling.BILINEAR)
+        self._photo = ImageTk.PhotoImage(image=img)
+        self.canvas.delete("all")
+        self.canvas.create_image(180, 135, image=self._photo)
+
+    def _finish_enrollment(self):
+        avg_emb = np.mean(self.samples, axis=0)
+        avg_emb /= np.linalg.norm(avg_emb)
+
+        bio_key = secrets.token_bytes(32)
+        with busy(self):
+            self.vault.enable_biometric(bio_key)
+            face_auth.save_biometric_profile(self.vault.path, bio_key, avg_emb)
+
+        self.success = True
+        messagebox.showinfo(APP, "Face ID enrolled successfully!\nYou can now use face recognition to unlock your vault.",
+                            parent=self.master)
+        self.destroy()
+
+    def _stop_camera(self):
+        if self._job:
+            try:
+                self.after_cancel(self._job)
+            except Exception:
+                pass
+            self._job = None
+        if self.cap:
+            try:
+                self.cap.release()
+            except Exception:
+                pass
+            self.cap = None
+
+    def _cleanup(self, event=None):
+        if event and event.widget == self:
+            self._stop_camera()
+
+
+class FaceUnlockDialog(Dialog):
+    """Camera modal to scan face and unlock vault."""
+
+    def __init__(self, app):
+        super().__init__(app, "Unlock with Face ID")
+        self.app = app
+        self.vault = None
+        self.cap = None
+        self._job = None
+        self.attempts = 0
+        self.max_attempts = 150
+
+        profile = face_auth.load_biometric_profile(app.vault_path)
+        if not profile:
+            messagebox.showerror(APP, "Biometric profile is missing or damaged. Use master password.", parent=app)
+            self.after(50, self.destroy)
+            return
+
+        self.bio_key, self.ref_emb = profile
+
+        b = self.body
+        ttk.Label(b, text="Face ID Unlock", style="H2.TLabel").pack(anchor="w", pady=(0, 4))
+        ttk.Label(b, text="Look directly at the camera to unlock SafeSpace.", style="CardMuted.TLabel").pack(anchor="w", pady=(0, 10))
+
+        self.canvas = tk.Canvas(b, width=360, height=270, bg="#1a1d24", highlightthickness=0)
+        self.canvas.pack(pady=(0, 10))
+
+        self.status_lbl = ttk.Label(b, text="Starting camera...", style="Card.TLabel", font=(FONT, 10, "bold"))
+        self.status_lbl.pack(anchor="center", pady=(0, 12))
+
+        btns = ttk.Frame(b, style="Card.TFrame")
+        btns.pack(fill="x")
+        ttk.Button(btns, text="Use Master Password", command=self.destroy).pack(side="right")
+
+        self.bind("<Destroy>", self._cleanup)
+        self.after(200, self._start_camera)
+
+    def _start_camera(self):
+        try:
+            self.cap = cv2.VideoCapture(0)
+            if not self.cap or not self.cap.isOpened():
+                self.status_lbl.configure(text="Webcam not detected. Use master password.", foreground=BAD_FG)
+                return
+            self._tick()
+        except Exception as e:
+            self.status_lbl.configure(text=f"Camera error: {e}", foreground=BAD_FG)
+
+    def _tick(self):
+        if not self.cap or not self.cap.isOpened():
+            return
+        ret, frame = self.cap.read()
+        if not ret or frame is None:
+            self._job = self.after(30, self._tick)
+            return
+
+        self.attempts += 1
+        frame = cv2.flip(frame, 1)
+        engine = face_auth.get_engine()
+        res = engine.process_frame(frame)
+
+        display_frame = frame.copy()
+        if res["ok"]:
+            matched, sim = engine.verify(res["embedding"], self.ref_emb)
+            bbox = res["bbox"]
+            if matched:
+                cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 220, 100), 3)
+                self.status_lbl.configure(text=f"Face recognized ({int(sim*100)}% match). Unlocking...", foreground=GOOD_FG)
+                self._render(display_frame)
+                self._stop_camera()
+                self.after(300, self._unlock_vault)
+                return
+            else:
+                cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 100, 255), 2)
+                self.status_lbl.configure(text=f"Face not recognized ({int(sim*100)}% match).", foreground=BAD_FG)
+        else:
+            if res.get("bbox"):
+                bbox = res["bbox"]
+                cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 180, 255), 2)
+            self.status_lbl.configure(text=res["msg"], foreground=WARN_FG)
+
+        self._render(display_frame)
+
+        if self.attempts >= self.max_attempts:
+            self.status_lbl.configure(text="Face verification timed out. Please enter master password.", foreground=BAD_FG)
+            self._stop_camera()
+            return
+
+        self._job = self.after(40, self._tick)
+
+    def _render(self, display_frame):
+        rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
+        img = Image.fromarray(rgb).resize((360, 270), Image.Resampling.BILINEAR)
+        self._photo = ImageTk.PhotoImage(image=img)
+        self.canvas.delete("all")
+        self.canvas.create_image(180, 135, image=self._photo)
+
+    def _unlock_vault(self):
+        try:
+            with busy(self.app):
+                self.vault = Vault.unlock_with_biometric(self.app.vault_path, self.bio_key)
+            self.destroy()
+        except WrongMasterPassword:
+            messagebox.showerror(APP, "Biometric authentication failed or vault file tampered.", parent=self.app)
+            self.destroy()
+
+    def _stop_camera(self):
+        if self._job:
+            try:
+                self.after_cancel(self._job)
+            except Exception:
+                pass
+            self._job = None
+        if self.cap:
+            try:
+                self.cap.release()
+            except Exception:
+                pass
+            self.cap = None
+
+    def _cleanup(self, event=None):
+        if event and event.widget == self:
+            self._stop_camera()
+
+
 class AccountDialog(Dialog):
     def __init__(self, app):
         super().__init__(app, "Account & security")
@@ -571,14 +820,23 @@ class AccountDialog(Dialog):
         cb2.bind("<<ComboboxSelected>>",
                  lambda e: v.set_setting("clip_clear_s", int(self.clip.get().split()[0])))
 
-        section(17, "Delete account",
+        section(17, "Face ID (Biometric Unlock)",
+                "Unlock your vault using facial recognition on this computer. "
+                "SafeSpace never saves your image; only an encrypted mathematical template is stored with Windows DPAPI.")
+        self.face_status_lbl = ttk.Label(b, text="", style="Card.TLabel")
+        self.face_status_lbl.grid(row=20, column=0, columnspan=2, sticky="w", pady=(2, 6))
+        self.face_btn_frame = ttk.Frame(b, style="Card.TFrame")
+        self.face_btn_frame.grid(row=21, column=0, columnspan=2, sticky="w")
+        self._refresh_face_section()
+
+        section(22, "Delete account",
                 "Permanently erases your vault from this computer. Make an encrypted backup (Export) first "
                 "if you might need your passwords again. This cannot be undone.")
         ttk.Button(b, text="Delete account and all data…", style="Danger.TButton",
-                   command=self.delete_account).grid(row=20, column=0, sticky="w")
+                   command=self.delete_account).grid(row=25, column=0, sticky="w")
 
         btns = ttk.Frame(b, style="Card.TFrame")
-        btns.grid(row=21, column=0, columnspan=2, sticky="e", pady=(16, 0))
+        btns.grid(row=26, column=0, columnspan=2, sticky="e", pady=(16, 0))
         ttk.Button(btns, text="Close", command=self.destroy).pack(side="right")
         ttk.Button(btns, text="Lock now", command=lambda: (self.destroy(), app.lock())).pack(side="right", padx=6)
 
@@ -618,6 +876,36 @@ class AccountDialog(Dialog):
         key = self.app.vault.reset_recovery_key()
         show_recovery_key(self, key)
         self.destroy()
+
+    def _refresh_face_section(self):
+        for w in self.face_btn_frame.winfo_children():
+            w.destroy()
+        v = self.app.vault
+        active = v.has_biometric and face_auth.has_biometric_profile(v.path)
+        if active:
+            self.face_status_lbl.configure(text="✓ Face ID is active for this vault on this computer.", foreground=GOOD_FG)
+            ttk.Button(self.face_btn_frame, text="Re-enroll Face…", command=self.enroll_face).pack(side="left", padx=(0, 8))
+            ttk.Button(self.face_btn_frame, text="Disable Face ID", style="Danger.TButton", command=self.disable_face).pack(side="left")
+        else:
+            self.face_status_lbl.configure(text="Face ID is not set up.", foreground=MUTED)
+            ttk.Button(self.face_btn_frame, text="Set up Face ID…", style="Primary.TButton", command=self.enroll_face).pack(side="left")
+
+    def enroll_face(self):
+        if not self.app.confirm_master(self, "Enter your master password to configure Face ID."):
+            return
+        dlg = FaceEnrollDialog(self, self.app.vault)
+        dlg.show()
+        self._refresh_face_section()
+
+    def disable_face(self):
+        if not messagebox.askyesno(APP, "Disable Face ID for this vault?\n\nYou will need to use your master password to unlock.", parent=self):
+            return
+        if not self.app.confirm_master(self, "Enter your master password to disable Face ID."):
+            return
+        self.app.vault.disable_biometric()
+        face_auth.delete_biometric_profile(self.app.vault.path)
+        self._refresh_face_section()
+        messagebox.showinfo(APP, "Face ID has been disabled.", parent=self)
 
     def delete_account(self):
         typed = simpledialog.askstring(APP, "This permanently deletes all your saved logins.\n\n"
@@ -674,22 +962,39 @@ class UnlockScreen(ttk.Frame):
         card = ttk.Frame(self, style="Card.TFrame", padding=32)
         card.place(relx=0.5, rely=0.42, anchor="center")
         ttk.Label(card, text="\U0001F512  SafeSpace", style="Big.TLabel", font=(FONT, 22, "bold")).pack(anchor="w")
-        ttk.Label(card, text="Enter your master password to unlock.", style="Card.TLabel").pack(anchor="w",
-                                                                                                pady=(4, 14))
+        ttk.Label(card, text="Unlock your vault to view passwords.", style="Card.TLabel").pack(anchor="w",
+                                                                                               pady=(4, 14))
         if message:
             ttk.Label(card, text=message, style="CardMuted.TLabel").pack(anchor="w", pady=(0, 8))
+
+        self.can_face = Vault.is_biometric_enabled(self.app.vault_path) and face_auth.has_biometric_profile(self.app.vault_path)
+        if self.can_face:
+            ttk.Button(card, text="👤  Unlock with Face ID", style="Primary.TButton",
+                       command=self.unlock_face).pack(fill="x", pady=(0, 10))
+            ttk.Label(card, text="— or enter master password —", style="CardMuted.TLabel").pack(anchor="center", pady=(0, 10))
+
         self.pw = tk.StringVar()
         field = PasswordField(card, self.pw, width=30)
         field.pack(fill="x")
         self.err = ttk.Label(card, text="", style="Card.TLabel", foreground=BAD_FG)
         self.err.pack(anchor="w", pady=(4, 0))
-        ttk.Button(card, text="Unlock", style="Primary.TButton", command=self.unlock).pack(fill="x", pady=(8, 0))
+        btn_style = "TButton" if self.can_face else "Primary.TButton"
+        ttk.Button(card, text="Unlock with Password", style=btn_style, command=self.unlock).pack(fill="x", pady=(8, 0))
         ttk.Button(card, text="Forgot your master password?", style="Link.TButton",
                    command=self.recover).pack(anchor="w", pady=(14, 0))
         if app.demo_hint:
             ttk.Label(card, text=app.demo_hint, style="CardMuted.TLabel").pack(anchor="w", pady=(14, 0))
         app.bind("<Return>", lambda e: self.unlock())
         field.entry.focus_set()
+
+    def unlock_face(self):
+        self.err.configure(text="")
+        dlg = FaceUnlockDialog(self.app)
+        dlg.show()
+        if dlg.vault:
+            self.app.unbind("<Return>")
+            self.app.vault = dlg.vault
+            self.app.show(HomeScreen)
 
     def unlock(self):
         try:

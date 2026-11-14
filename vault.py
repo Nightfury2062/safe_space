@@ -127,6 +127,18 @@ class Vault:
             raise WrongMasterPassword() from None
         return cls(path, data, vk)
 
+    @classmethod
+    def unlock_with_biometric(cls, path: str, biometric_key: bytes) -> "Vault":
+        data = cls._read(path)
+        if "biometric" not in data:
+            raise ValueError("Biometric unlock is not configured for this vault.")
+        b = data["biometric"]
+        try:
+            vk = open_sealed(biometric_key, _unb64(b["wrapped_vk"]), b"biometric" + _unb64(data["vault_id"]))
+        except CryptoError:
+            raise WrongMasterPassword("Biometric key rejected or vault tampered.") from None
+        return cls(path, data, vk)
+
     def lock(self) -> None:
         wipe(self._vk)
         self.items = {}
@@ -164,6 +176,35 @@ class Vault:
     @property
     def recovery_created(self) -> int:
         return self._data.get("recovery", {}).get("created", 0)
+
+    # ------------------------------------------------------------ biometrics
+    def enable_biometric(self, biometric_key: bytes) -> None:
+        """Wraps VK using biometric_key and stores in vault metadata."""
+        wrapped_vk = seal(biometric_key, bytes(self._vk), b"biometric" + self._vault_id)
+        self._data["biometric"] = {
+            "wrapped_vk": _b64(wrapped_vk),
+            "enabled_at": int(time.time()),
+        }
+        self.save()
+
+    def disable_biometric(self) -> None:
+        """Removes biometric key wrapping from vault metadata."""
+        if "biometric" in self._data:
+            del self._data["biometric"]
+            self.save()
+
+    @property
+    def has_biometric(self) -> bool:
+        return "biometric" in self._data
+
+    @classmethod
+    def is_biometric_enabled(cls, path: str) -> bool:
+        """Checks whether the given vault file has biometric unlock enabled."""
+        try:
+            data = cls._read(path)
+            return "biometric" in data
+        except Exception:
+            return False
 
     # ------------------------------------------------------------ settings
     @property

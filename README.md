@@ -41,6 +41,10 @@ Builds on `open_locker_demo.py` (the "house and lockers" design):
 
 * **House:** master password → Argon2id → HKDF → key that unwraps the vault key (VK).
   A random recovery key (shown once at setup) wraps a second copy of VK.
+* **Biometrics (Face ID):** Enrolling Face ID generates a random 256-bit Biometric Key (BK) that wraps VK.
+  BK and the user's ArcFace reference embedding are encrypted on disk with Windows DPAPI (tied to the OS user).
+  During unlock, RetinaFace detects the face, ArcFace extracts the 512-d normalized embedding, and verification succeeds
+  when Cosine Similarity $\ge \tau$ (0.62), releasing BK to unwrap VK.
 * **Index:** names, usernames, websites, categories and strength scores are sealed under a key derived from VK. The file on disk shows no account names.
 * **Lockers:** each login is its own locker (`create_locker` / `open_locker`, unchanged).
   The optional "Extra lock" PIN is the locker PIN; without one the PIN is the empty string.
@@ -52,8 +56,9 @@ Known limits (worth mentioning in the report): Python can't reliably wipe string
 
 ## Files
 
-* `app.py`: Tkinter UI (screens, dialogs, demo data)
-* `vault.py`: vault file, master password and recovery key, index, CSV import/export
+* `app.py`: Tkinter UI (screens, dialogs, demo data, Face ID dialogs)
+* `vault.py`: vault file, master password and recovery key, biometric wrapping, index, CSV import/export
+* `face_auth.py`: deep learning face pipeline (RetinaFace + ArcFace) and DPAPI biometric store
 * `passgen.py`: password and passphrase generator, strength check
 * `open_locker_demo.py`: per-locker crypto (original walkthrough; still runs on its own)
 * `test_vault.py`: unit tests
