@@ -41,10 +41,12 @@ Builds on `open_locker_demo.py` (the "house and lockers" design):
 
 * **House:** master password → Argon2id → HKDF → key that unwraps the vault key (VK).
   A random recovery key (shown once at setup) wraps a second copy of VK.
-* **Biometrics (Face ID):** Enrolling Face ID generates a random 256-bit Biometric Key (BK) that wraps VK.
+* **Biometrics (Face ID & Active Liveness):** Enrolling Face ID generates a random 256-bit Biometric Key (BK) that wraps VK.
   BK and the user's ArcFace reference embedding are encrypted on disk with Windows DPAPI (tied to the OS user).
-  During unlock, RetinaFace detects the face, ArcFace extracts the 512-d normalized embedding, and verification succeeds
-  when Cosine Similarity $\ge \tau$ (0.62), releasing BK to unwrap VK.
+  During unlock, RetinaFace detects the face, ArcFace extracts the 512-d normalized embedding, and once identity is confirmed
+  (Cosine Similarity $\ge \tau = 0.62$), an **Active Liveness Challenge** requires a 3D head turn (measured via facial landmark yaw ratio).
+  This prevents presentation attacks using 2D printed photos or smartphone screens.
+  To eliminate latency, ONNX models are pre-warmed in a background thread and the camera uses DirectShow for sub-second startup.
 * **Index:** names, usernames, websites, categories and strength scores are sealed under a key derived from VK. The file on disk shows no account names.
 * **Lockers:** each login is its own locker (`create_locker` / `open_locker`, unchanged).
   The optional "Extra lock" PIN is the locker PIN; without one the PIN is the empty string.

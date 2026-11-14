@@ -12,6 +12,7 @@ import argparse
 import os
 import secrets
 import sys
+import threading
 import time
 import tkinter as tk
 import webbrowser
@@ -558,14 +559,17 @@ class FaceEnrollDialog(Dialog):
         ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="right")
 
         self.bind("<Destroy>", self._cleanup)
-        self.after(200, self._start_camera)
+        self.after(50, self._start_camera)
 
     def _start_camera(self):
         try:
-            self.cap = cv2.VideoCapture(0)
+            self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+            if not self.cap or not self.cap.isOpened():
+                self.cap = cv2.VideoCapture(0)
             if not self.cap or not self.cap.isOpened():
                 self.status_lbl.configure(text="Could not open camera. Please check your webcam.", foreground=BAD_FG)
                 return
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             self._tick()
         except Exception as e:
             self.status_lbl.configure(text=f"Camera error: {e}", foreground=BAD_FG)
@@ -585,18 +589,22 @@ class FaceEnrollDialog(Dialog):
         display_frame = frame.copy()
         if res["ok"]:
             bbox = res["bbox"]
-            cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 220, 100), 2)
-            self.samples.append(res["embedding"])
-            self.progress.configure(value=len(self.samples))
-            self.status_lbl.configure(
-                text=f"Face detected! Hold still... ({len(self.samples)}/{self.needed})",
-                foreground=GOOD_FG,
-            )
-            if len(self.samples) >= self.needed:
-                self._render(display_frame)
-                self._stop_camera()
-                self.after(300, self._finish_enrollment)
-                return
+            if res["pose"] != "CENTER":
+                cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 180, 255), 2)
+                self.status_lbl.configure(text="Please face directly forward at the camera.", foreground=WARN_FG)
+            else:
+                cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 220, 100), 2)
+                self.samples.append(res["embedding"])
+                self.progress.configure(value=len(self.samples))
+                self.status_lbl.configure(
+                    text=f"Face detected! Hold still... ({len(self.samples)}/{self.needed})",
+                    foreground=GOOD_FG,
+                )
+                if len(self.samples) >= self.needed:
+                    self._render(display_frame)
+                    self._stop_camera()
+                    self.after(300, self._finish_enrollment)
+                    return
         else:
             if res.get("bbox"):
                 bbox = res["bbox"]
@@ -604,7 +612,7 @@ class FaceEnrollDialog(Dialog):
             self.status_lbl.configure(text=res["msg"], foreground=WARN_FG)
 
         self._render(display_frame)
-        self._job = self.after(40, self._tick)
+        self._job = self.after(35, self._tick)
 
     def _render(self, display_frame):
         rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
@@ -647,7 +655,11 @@ class FaceEnrollDialog(Dialog):
 
 
 class FaceUnlockDialog(Dialog):
-    """Camera modal to scan face and unlock vault."""
+    """Camera modal to scan face, verify active liveness, and unlock vault."""
+
+    STATE_IDENTIFY = 0   # Step 1: Matching face embedding with reference
+    STATE_CHALLENGE = 1  # Step 2: Waiting for user to turn head left
+    STATE_SUCCESS = 2    # Step 3: Verified, releasing key
 
     def __init__(self, app):
         super().__init__(app, "Unlock with Face ID")
@@ -655,8 +667,10 @@ class FaceUnlockDialog(Dialog):
         self.vault = None
         self.cap = None
         self._job = None
+        self.state = self.STATE_IDENTIFY
         self.attempts = 0
         self.max_attempts = 150
+        self.challenge_start_frame = 0
 
         profile = face_auth.load_biometric_profile(app.vault_path)
         if not profile:
@@ -668,7 +682,7 @@ class FaceUnlockDialog(Dialog):
 
         b = self.body
         ttk.Label(b, text="Face ID Unlock", style="H2.TLabel").pack(anchor="w", pady=(0, 4))
-        ttk.Label(b, text="Look directly at the camera to unlock SafeSpace.", style="CardMuted.TLabel").pack(anchor="w", pady=(0, 10))
+        ttk.Label(b, text="Look directly at the camera to begin.", style="CardMuted.TLabel").pack(anchor="w", pady=(0, 10))
 
         self.canvas = tk.Canvas(b, width=360, height=270, bg="#1a1d24", highlightthickness=0)
         self.canvas.pack(pady=(0, 10))
@@ -681,14 +695,17 @@ class FaceUnlockDialog(Dialog):
         ttk.Button(btns, text="Use Master Password", command=self.destroy).pack(side="right")
 
         self.bind("<Destroy>", self._cleanup)
-        self.after(200, self._start_camera)
+        self.after(50, self._start_camera)
 
     def _start_camera(self):
         try:
-            self.cap = cv2.VideoCapture(0)
+            self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+            if not self.cap or not self.cap.isOpened():
+                self.cap = cv2.VideoCapture(0)
             if not self.cap or not self.cap.isOpened():
                 self.status_lbl.configure(text="Webcam not detected. Use master password.", foreground=BAD_FG)
                 return
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             self._tick()
         except Exception as e:
             self.status_lbl.configure(text=f"Camera error: {e}", foreground=BAD_FG)
@@ -707,24 +724,64 @@ class FaceUnlockDialog(Dialog):
         res = engine.process_frame(frame)
 
         display_frame = frame.copy()
-        if res["ok"]:
-            matched, sim = engine.verify(res["embedding"], self.ref_emb)
-            bbox = res["bbox"]
-            if matched:
-                cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 220, 100), 3)
-                self.status_lbl.configure(text=f"Face recognized ({int(sim*100)}% match). Unlocking...", foreground=GOOD_FG)
-                self._render(display_frame)
-                self._stop_camera()
-                self.after(300, self._unlock_vault)
-                return
-            else:
-                cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 100, 255), 2)
-                self.status_lbl.configure(text=f"Face not recognized ({int(sim*100)}% match).", foreground=BAD_FG)
-        else:
-            if res.get("bbox"):
+        h, w, _ = display_frame.shape
+
+        if self.state == self.STATE_IDENTIFY:
+            if res["ok"]:
+                matched, sim = engine.verify(res["embedding"], self.ref_emb)
                 bbox = res["bbox"]
-                cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 180, 255), 2)
-            self.status_lbl.configure(text=res["msg"], foreground=WARN_FG)
+                if matched:
+                    if res["pose"] == "CENTER":
+                        cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 220, 100), 2)
+                        self.state = self.STATE_CHALLENGE
+                        self.challenge_start_frame = self.attempts
+                        self.status_lbl.configure(
+                            text="👤 Face recognized! Now turn your head slightly LEFT ←",
+                            foreground=PRIMARY,
+                        )
+                    else:
+                        cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 180, 255), 2)
+                        self.status_lbl.configure(text="Please face forward first...", foreground=WARN_FG)
+                else:
+                    cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 100, 255), 2)
+                    self.status_lbl.configure(text=f"Face not recognized ({int(sim*100)}% match).", foreground=BAD_FG)
+            else:
+                if res.get("bbox"):
+                    bbox = res["bbox"]
+                    cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 180, 255), 2)
+                self.status_lbl.configure(text=res["msg"], foreground=WARN_FG)
+
+        elif self.state == self.STATE_CHALLENGE:
+            # Active liveness: draw guidance arrow and check 3D head yaw
+            cv2.arrowedLine(display_frame, (int(w * 0.70), int(h * 0.16)), (int(w * 0.30), int(h * 0.16)), (0, 220, 255), 3, tipLength=0.3)
+            cv2.putText(display_frame, "TURN HEAD LEFT", (int(w * 0.28), int(h * 0.11)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 255), 2)
+
+            if res["ok"] and res.get("bbox"):
+                bbox = res["bbox"]
+                if res["pose"] == "LEFT":
+                    # Liveness verified!
+                    cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 220, 100), 3)
+                    self.status_lbl.configure(text="✓ Liveness verified! Unlocking...", foreground=GOOD_FG)
+                    self.state = self.STATE_SUCCESS
+                    self._render(display_frame)
+                    self._stop_camera()
+                    self.after(300, self._unlock_vault)
+                    return
+                else:
+                    cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 220, 255), 2)
+                    self.status_lbl.configure(
+                        text="Turn your head slightly LEFT ← to verify liveness",
+                        foreground=PRIMARY,
+                    )
+
+            # If ~3.5 seconds elapse in challenge state without a genuine head turn
+            if self.attempts - self.challenge_start_frame > 75:
+                self.status_lbl.configure(
+                    text="Liveness check failed (no head turn detected). Use master password.",
+                    foreground=BAD_FG,
+                )
+                self._stop_camera()
+                return
 
         self._render(display_frame)
 
@@ -733,7 +790,7 @@ class FaceUnlockDialog(Dialog):
             self._stop_camera()
             return
 
-        self._job = self.after(40, self._tick)
+        self._job = self.after(35, self._tick)
 
     def _render(self, display_frame):
         rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
@@ -1399,6 +1456,10 @@ class App(tk.Tk):
         for ev in ("<Any-KeyPress>", "<Any-Button>", "<Motion>"):
             self.bind_all(ev, self._touch, add="+")
         self.protocol("WM_DELETE_WINDOW", self.quit_app)
+
+        # Pre-warm Deep Learning engine in background (0s delay on Face ID, never touches camera/LED)
+        threading.Thread(target=face_auth.prewarm, daemon=True).start()
+
         self.show(UnlockScreen if Vault.exists(vault_path) else SetupScreen)
         self.after(5000, self._tick)
 

@@ -2,10 +2,10 @@
 face_auth.py - Deep Learning Face Recognition pipeline and secure biometric storage for SafeSpace.
 
 Pipeline:
-1. Capture video frame via OpenCV
+1. Capture video frame via OpenCV (DirectShow backend for sub-second startup)
 2. Detect & align face using RetinaFace (InsightFace buffalo_sc)
 3. Extract 512-d ArcFace normalized embedding
-4. Perform liveness checks (framing, single-face validation, score confidence)
+4. Perform liveness & 3D head-pose analysis (yaw ratio via facial landmarks)
 5. Compare live embedding with enrolled reference embedding via Cosine Similarity (dot product)
 6. Secure storage: Biometric wrap key (BK) and reference embedding are encrypted
    with Windows DPAPI (CryptProtectData) and tied to the user's OS account.
@@ -18,7 +18,7 @@ import os
 import sys
 import numpy as np
 
-# Lazy load InsightFace / cv2 so app startup is instant
+# Singleton instance
 _engine_instance = None
 
 
@@ -54,6 +54,43 @@ def dpapi_decrypt(data: bytes) -> bytes:
     return res
 
 
+def calculate_head_pose(kps: np.ndarray) -> tuple[str, float]:
+    """
+    Computes horizontal yaw ratio from 5 facial landmarks in mirrored preview.
+    kps: array of shape (5, 2)
+    Returns (pose_str, yaw_ratio)
+    pose_str: "CENTER", "LEFT", "RIGHT"
+    """
+    if kps is None or len(kps) < 5:
+        return "UNKNOWN", 0.5
+
+    pt_eye1, pt_eye2 = kps[0], kps[1]
+    if pt_eye1[0] > pt_eye2[0]:
+        eye_left, eye_right = pt_eye2, pt_eye1
+    else:
+        eye_left, eye_right = pt_eye1, pt_eye2
+
+    nose = kps[2]
+    eye_dist = eye_right[0] - eye_left[0]
+    if eye_dist <= 1.0:
+        return "UNKNOWN", 0.5
+
+    yaw_ratio = float((nose[0] - eye_left[0]) / eye_dist)
+
+    # In mirrored webcam view:
+    # Turning head to user's left moves nose left on screen -> yaw_ratio < 0.36
+    # Turning head to user's right moves nose right on screen -> yaw_ratio > 0.64
+    # Facing forward: yaw_ratio between 0.38 and 0.62
+    if yaw_ratio < 0.36:
+        pose = "LEFT"
+    elif yaw_ratio > 0.64:
+        pose = "RIGHT"
+    else:
+        pose = "CENTER"
+
+    return pose, yaw_ratio
+
+
 class FaceAuthEngine:
     def __init__(self, threshold: float = 0.62):
         self.threshold = threshold
@@ -70,37 +107,81 @@ class FaceAuthEngine:
                 "ok": bool,
                 "msg": str,
                 "bbox": [x1, y1, x2, y2] | None,
+                "landmarks": np.ndarray | None,
                 "embedding": np.ndarray | None,
-                "score": float
+                "score": float,
+                "pose": str ("CENTER", "LEFT", "RIGHT", "UNKNOWN"),
+                "yaw_ratio": float
             }
         """
         faces = self.app.get(frame)
         if len(faces) == 0:
-            return {"ok": False, "msg": "No face detected. Center your face in the camera.", "bbox": None, "embedding": None, "score": 0.0}
+            return {
+                "ok": False,
+                "msg": "No face detected. Center your face in the camera.",
+                "bbox": None,
+                "landmarks": None,
+                "embedding": None,
+                "score": 0.0,
+                "pose": "UNKNOWN",
+                "yaw_ratio": 0.5,
+            }
         if len(faces) > 1:
-            return {"ok": False, "msg": "Multiple faces detected. Ensure only you are in frame.", "bbox": None, "embedding": None, "score": 0.0}
+            return {
+                "ok": False,
+                "msg": "Multiple faces detected. Ensure only you are in frame.",
+                "bbox": None,
+                "landmarks": None,
+                "embedding": None,
+                "score": 0.0,
+                "pose": "UNKNOWN",
+                "yaw_ratio": 0.5,
+            }
 
         face = faces[0]
         bbox = [int(v) for v in face.bbox]
         score = float(face.det_score)
 
         if score < 0.65:
-            return {"ok": False, "msg": "Face low confidence. Improve lighting.", "bbox": bbox, "embedding": None, "score": score}
+            return {
+                "ok": False,
+                "msg": "Face low confidence. Improve lighting.",
+                "bbox": bbox,
+                "landmarks": face.kps,
+                "embedding": None,
+                "score": score,
+                "pose": "UNKNOWN",
+                "yaw_ratio": 0.5,
+            }
 
         # Check face size in frame (must not be too far away)
         w = bbox[2] - bbox[0]
         h = bbox[3] - bbox[1]
         if w < 75 or h < 75:
-            return {"ok": False, "msg": "Move a bit closer to the camera.", "bbox": bbox, "embedding": None, "score": score}
+            return {
+                "ok": False,
+                "msg": "Move a bit closer to the camera.",
+                "bbox": bbox,
+                "landmarks": face.kps,
+                "embedding": None,
+                "score": score,
+                "pose": "UNKNOWN",
+                "yaw_ratio": 0.5,
+            }
 
         emb = face.embedding
         norm_emb = emb / np.linalg.norm(emb)
+        pose, yaw_ratio = calculate_head_pose(face.kps)
+
         return {
             "ok": True,
             "msg": "Face detected",
             "bbox": bbox,
+            "landmarks": face.kps,
             "embedding": norm_emb,
             "score": score,
+            "pose": pose,
+            "yaw_ratio": yaw_ratio,
         }
 
     def verify(self, live_emb: np.ndarray, ref_emb: np.ndarray) -> tuple[bool, float]:
@@ -116,63 +197,12 @@ def get_engine() -> FaceAuthEngine:
     return _engine_instance
 
 
-# ---------------------------------------------------------------- Secure Profile Store
-def _profile_path(vault_path: str) -> str:
-    base, _ = os.path.splitext(os.path.abspath(vault_path))
-    return base + ".faceid"
-
-
-def has_biometric_profile(vault_path: str) -> bool:
-    return os.path.exists(_profile_path(vault_path))
-
-
-def save_biometric_profile(vault_path: str, biometric_key: bytes, embedding: np.ndarray) -> None:
-    """Encrypts BK and embedding with DPAPI and stores to disk."""
-    data = {
-        "version": 1,
-        "biometric_key_hex": biometric_key.hex(),
-        "embedding": embedding.tolist(),
-    }
-    raw = json.dumps(data).encode("utf-8")
-    enc = dpapi_encrypt(raw, description="SafeSpace Biometric Profile")
-    p = _profile_path(vault_path)
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    with open(p, "wb") as f:
-        f.write(enc)
-
-
-def load_biometric_profile(vault_path: str) -> tuple[bytes, np.ndarray] | None:
-    """Loads and decrypts BK and embedding using DPAPI."""
-    p = _profile_path(vault_path)
-    if not os.path.exists(p):
-        return None
+def prewarm() -> None:
+    """Initializes the engine in memory ahead of time."""
     try:
-        with open(p, "rb") as f:
-            enc = f.read()
-        raw = dpapi_decrypt(enc)
-        data = json.loads(raw.decode("utf-8"))
-        bio_key = bytes.fromhex(data["biometric_key_hex"])
-        emb = np.array(data["embedding"], dtype=np.float32)
-        return bio_key, emb
+        get_engine()
     except Exception:
-        return None
-
-
-def delete_biometric_profile(vault_path: str) -> None:
-    p = _profile_path(vault_path)
-    if os.path.exists(p):
-        try:
-            os.remove(p)
-        except OSError:
-            pass
-
-
-
-def get_engine() -> FaceAuthEngine:
-    global _engine_instance
-    if _engine_instance is None:
-        _engine_instance = FaceAuthEngine()
-    return _engine_instance
+        pass
 
 
 # ---------------------------------------------------------------- Secure Profile Store
