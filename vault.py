@@ -18,6 +18,8 @@ import hmac
 import json
 import os
 import secrets
+import shutil
+import sys
 import time
 
 from nacl.exceptions import CryptoError
@@ -29,6 +31,10 @@ from open_locker_demo import (
 
 FORMAT = "safespace-1"
 MASTER_KDF = dict(PIN_KDF)
+
+# DoS Prevention limits
+MAX_VAULT_FILE_SIZE = 10 * 1024 * 1024  # 10 MB limit against JSON/vault bombing
+MAX_CSV_IMPORT_SIZE = 5 * 1024 * 1024   # 5 MB limit against CSV bombing
 
 
 class WrongMasterPassword(Exception):
@@ -64,7 +70,12 @@ def new_recovery_key() -> str:
 
 
 def default_vault_path() -> str:
-    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
     return os.path.join(base, "SafeSpace", "vault.json")
 
 
@@ -99,6 +110,9 @@ class Vault:
 
     @classmethod
     def _read(cls, path: str) -> dict:
+        if os.path.exists(path) and os.path.getsize(path) > MAX_VAULT_FILE_SIZE:
+            size_mb = os.path.getsize(path) / (1024 * 1024)
+            raise ValueError(f"Vault file exceeds maximum allowed size of 10 MB ({size_mb:.1f} MB). Operation rejected.")
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         if data.get("format") != FORMAT:
@@ -145,10 +159,26 @@ class Vault:
 
     def save(self) -> None:
         os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+        # Maintain a backup copy of the last known good vault file
+        bak = self.path + ".bak"
+        if os.path.exists(self.path) and os.path.getsize(self.path) > 0:
+            try:
+                shutil.copy2(self.path, bak)
+            except Exception:
+                pass
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self._data, f, indent=1)
         os.replace(tmp, self.path)           # atomic: never leave a half-written vault
+
+    @staticmethod
+    def restore_backup(path: str) -> bool:
+        """Restores the vault from the .bak backup snapshot if it exists."""
+        bak = path + ".bak"
+        if os.path.exists(bak) and os.path.getsize(bak) > 0:
+            shutil.copy2(bak, path)
+            return True
+        return False
 
     # ------------------------------------------------------------ house keys
     def _set_master(self, master_password: str) -> None:
@@ -319,6 +349,9 @@ class Vault:
 def read_import_csv(src: str) -> list[dict]:
     """Reads a CSV from SafeSpace, Chrome, Edge, Firefox, Bitwarden or 1Password-style
     exports. Returns rows with name, url, username, password, notes, category."""
+    if os.path.exists(src) and os.path.getsize(src) > MAX_CSV_IMPORT_SIZE:
+        size_mb = os.path.getsize(src) / (1024 * 1024)
+        raise ValueError(f"CSV import file exceeds maximum allowed size of 5 MB ({size_mb:.1f} MB). Operation rejected.")
     aliases = {
         "name": ("name", "title", "account", "site"),
         "url": ("url", "login_uri", "website", "web site", "origin", "hostname"),

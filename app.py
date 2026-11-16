@@ -9,8 +9,11 @@ Requires: pip install argon2-cffi pynacl cryptography
 """
 
 import argparse
+import json
+import math
 import os
 import secrets
+import shutil
 import sys
 import threading
 import time
@@ -29,6 +32,10 @@ import face_auth
 import passgen
 from open_locker_demo import WrongPinOrTampered
 from vault import Vault, WrongMasterPassword, default_vault_path, read_import_csv
+
+# Global rate limiting state (Argon2id DoS mitigation)
+_failed_attempts = 0
+_cooldown_until = 0.0
 
 APP = "SafeSpace"
 VERSION = "0.1"
@@ -676,7 +683,8 @@ class FaceEnrollDialog(Dialog):
 
     def _start_camera(self):
         try:
-            self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+            backend = face_auth.get_camera_backend()
+            self.cap = cv2.VideoCapture(0, backend)
             if not self.cap or not self.cap.isOpened():
                 self.cap = cv2.VideoCapture(0)
             if not self.cap or not self.cap.isOpened():
@@ -685,6 +693,7 @@ class FaceEnrollDialog(Dialog):
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             self._tick()
         except Exception as e:
+            self._stop_camera()
             self.status_lbl.configure(text=f"Camera error: {e}", foreground=BAD_FG)
 
     def _tick(self):
@@ -763,8 +772,14 @@ class FaceEnrollDialog(Dialog):
             self.cap = None
 
     def _cleanup(self, event=None):
-        if event and event.widget == self:
+        if event is None or event.widget == self:
             self._stop_camera()
+
+    def destroy(self):
+        try:
+            self._stop_camera()
+        finally:
+            super().destroy()
 
 
 class FaceUnlockDialog(Dialog):
@@ -784,6 +799,9 @@ class FaceUnlockDialog(Dialog):
         self.attempts = 0
         self.max_attempts = 150
         self.challenge_start_frame = 0
+        self.start_time = None
+        self.failed_face_attempts = 0
+        self.fallback_reason = ""
 
         profile = face_auth.load_biometric_profile(app.vault_path)
         if not profile:
@@ -805,28 +823,54 @@ class FaceUnlockDialog(Dialog):
 
         btns = ttk.Frame(b, style="Card.TFrame")
         btns.pack(fill="x")
-        ttk.Button(btns, text="Use Master Password", command=self.destroy).pack(side="right")
+        ttk.Button(btns, text="Use Master Password", command=self._fallback_to_password).pack(side="right")
 
         self.bind("<Destroy>", self._cleanup)
         self.after(50, self._start_camera)
 
+    def _fallback_to_password(self):
+        self._stop_camera()
+        self.destroy()
+
     def _start_camera(self):
         try:
-            self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+            backend = face_auth.get_camera_backend()
+            self.cap = cv2.VideoCapture(0, backend)
             if not self.cap or not self.cap.isOpened():
                 self.cap = cv2.VideoCapture(0)
             if not self.cap or not self.cap.isOpened():
                 self.status_lbl.configure(text="Webcam not detected. Use master password.", foreground=BAD_FG)
+                self.fallback_reason = "Webcam not detected. Please use master password."
+                self.after(1000, self._fallback_to_password)
                 return
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            self.start_time = time.time()
             self._tick()
         except Exception as e:
+            self._stop_camera()
             self.status_lbl.configure(text=f"Camera error: {e}", foreground=BAD_FG)
+            self.fallback_reason = f"Camera error: {e}"
+            self.after(1000, self._fallback_to_password)
 
     def _tick(self):
         if not self.cap or not self.cap.isOpened():
             return
-        ret, frame = self.cap.read()
+
+        # 10-second timeout enforcement (Hardware starvation & DoS prevention)
+        if self.start_time and (time.time() - self.start_time) >= 10.0:
+            self.status_lbl.configure(text="Face verification timed out (10s). Switching to password...", foreground=BAD_FG)
+            self.fallback_reason = "Face verification timed out (10s limit). Please use master password."
+            self._stop_camera()
+            self.after(800, self._fallback_to_password)
+            return
+
+        try:
+            ret, frame = self.cap.read()
+        except Exception:
+            self._stop_camera()
+            self._fallback_to_password()
+            return
+
         if not ret or frame is None:
             self._job = self.after(30, self._tick)
             return
@@ -856,8 +900,23 @@ class FaceUnlockDialog(Dialog):
                         cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 180, 255), 2)
                         self.status_lbl.configure(text="Please face forward first...", foreground=WARN_FG)
                 else:
+                    self.failed_face_attempts += 1
                     cv2.rectangle(display_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 100, 255), 2)
-                    self.status_lbl.configure(text=f"Face not recognized ({int(sim*100)}% match).", foreground=BAD_FG)
+                    if self.failed_face_attempts >= 3:
+                        self.status_lbl.configure(
+                            text="Face verification failed (3 attempts). Switching to password...",
+                            foreground=BAD_FG,
+                        )
+                        self.fallback_reason = "Face not recognized after 3 attempts. Please enter master password."
+                        self._render(display_frame)
+                        self._stop_camera()
+                        self.after(800, self._fallback_to_password)
+                        return
+                    else:
+                        self.status_lbl.configure(
+                            text=f"Face not recognized ({int(sim*100)}% match). Attempt {self.failed_face_attempts}/3",
+                            foreground=BAD_FG,
+                        )
             else:
                 if res.get("bbox"):
                     bbox = res["bbox"]
@@ -889,18 +948,30 @@ class FaceUnlockDialog(Dialog):
 
             # If ~3.5 seconds elapse in challenge state without a genuine head turn
             if self.attempts - self.challenge_start_frame > 75:
-                self.status_lbl.configure(
-                    text="Liveness check failed (no head turn detected). Use master password.",
-                    foreground=BAD_FG,
-                )
-                self._stop_camera()
-                return
+                self.failed_face_attempts += 1
+                if self.failed_face_attempts >= 3:
+                    self.status_lbl.configure(
+                        text="Liveness check failed (3 attempts). Switching to password...",
+                        foreground=BAD_FG,
+                    )
+                    self.fallback_reason = "Liveness check failed. Please enter master password."
+                    self._stop_camera()
+                    self.after(800, self._fallback_to_password)
+                    return
+                else:
+                    self.state = self.STATE_IDENTIFY
+                    self.status_lbl.configure(
+                        text=f"Liveness check incomplete ({self.failed_face_attempts}/3). Face forward...",
+                        foreground=WARN_FG,
+                    )
 
         self._render(display_frame)
 
         if self.attempts >= self.max_attempts:
             self.status_lbl.configure(text="Face verification timed out. Please enter master password.", foreground=BAD_FG)
+            self.fallback_reason = "Face verification timed out. Please enter master password."
             self._stop_camera()
+            self.after(800, self._fallback_to_password)
             return
 
         self._job = self.after(35, self._tick)
@@ -936,8 +1007,14 @@ class FaceUnlockDialog(Dialog):
             self.cap = None
 
     def _cleanup(self, event=None):
-        if event and event.widget == self:
+        if event is None or event.widget == self:
             self._stop_camera()
+
+    def destroy(self):
+        try:
+            self._stop_camera()
+        finally:
+            super().destroy()
 
 
 class AccountDialog(Dialog):
@@ -968,7 +1045,11 @@ class AccountDialog(Dialog):
                 "If you forget your master password, your recovery key is the only way back in. "
                 "SafeSpace cannot reset it for you.\n"
                 f"Current recovery key created: {fmt_date(v.recovery_created)}")
-        ttk.Button(b, text="Create a new recovery key…", command=self.new_recovery).grid(row=11, column=0, sticky="w")
+        rec_frame = ttk.Frame(b, style="Card.TFrame")
+        rec_frame.grid(row=11, column=0, columnspan=2, sticky="w")
+        ttk.Button(rec_frame, text="Create a new recovery key…", command=self.new_recovery).pack(side="left")
+        if os.path.exists(v.path + ".bak"):
+            ttk.Button(rec_frame, text="Restore from backup (.bak)…", command=self.restore_backup).pack(side="left", padx=8)
 
         section(12, "Settings", "")
         self.autolock = tk.StringVar(value=self._autolock_label(v.settings.get("autolock_min", 5)))
@@ -1076,6 +1157,29 @@ class AccountDialog(Dialog):
         key = self.app.vault.reset_recovery_key()
         show_recovery_key(self, key)
         self.destroy()
+
+    def restore_backup(self):
+        bak = self.app.vault.path + ".bak"
+        if not os.path.exists(bak):
+            messagebox.showinfo(APP, "No backup file found.", parent=self)
+            return
+        if not messagebox.askyesno(
+            APP,
+            "Restore vault from the last known good backup (.bak)?\n\nAny changes made since the last backup snapshot will be rolled back.",
+            parent=self,
+            icon="warning"
+        ):
+            return
+        if not self.app.confirm_master(self, "Enter your master password to authorize restoring backup."):
+            return
+        try:
+            with busy(self):
+                Vault.restore_backup(self.app.vault.path)
+            messagebox.showinfo(APP, "Vault restored from backup snapshot successfully. SafeSpace will now lock so you can log into the restored vault.", parent=self)
+            self.destroy()
+            self.app.lock()
+        except Exception as e:
+            messagebox.showerror(APP, f"Failed to restore backup: {e}", parent=self)
 
     def _refresh_face_section(self):
         for w in self.face_btn_frame.winfo_children():
@@ -1186,13 +1290,18 @@ class UnlockScreen(ttk.Frame):
         self.err = ttk.Label(card, text="", style="Card.TLabel", foreground=BAD_FG)
         self.err.pack(anchor="w", pady=(4, 0))
         btn_style = "TButton" if self.can_face else "Primary.TButton"
-        ttk.Button(card, text="Unlock with Password", style=btn_style, command=self.unlock).pack(fill="x", pady=(8, 0))
+        self._unlocking = False
+        self.unlock_btn = ttk.Button(card, text="Unlock with Password", style=btn_style, command=self.unlock)
+        self.unlock_btn.pack(fill="x", pady=(8, 0))
         ttk.Button(card, text="Forgot your master password?", style="Link.TButton",
                    command=self.recover).pack(anchor="w", pady=(14, 0))
         if app.demo_hint:
             ttk.Label(card, text=app.demo_hint, style="CardMuted.TLabel").pack(anchor="w", pady=(14, 0))
         app.bind("<Return>", lambda e: self.unlock())
         field.entry.focus_set()
+
+        if time.time() < _cooldown_until:
+            self._start_cooldown_timer(int(math.ceil(_cooldown_until - time.time())))
 
     def unlock_face(self):
         self.err.configure(text="")
@@ -1202,18 +1311,91 @@ class UnlockScreen(ttk.Frame):
             self.app.unbind("<Return>")
             self.app.vault = dlg.vault
             self.app.show(HomeScreen)
+        elif dlg.fallback_reason:
+            self.err.configure(text=dlg.fallback_reason)
+
+    def _start_cooldown_timer(self, delay):
+        if hasattr(self, "unlock_btn") and self.unlock_btn.winfo_exists():
+            self.unlock_btn.configure(state="disabled")
+        self._tick_cooldown()
+
+    def _tick_cooldown(self):
+        now = time.time()
+        if now < _cooldown_until:
+            secs = int(math.ceil(_cooldown_until - now))
+            self.err.configure(
+                text=f"Too many failed attempts. Rate limited for security.\nPlease wait {secs} second{'s' if secs != 1 else ''} before trying again."
+            )
+            self.after(1000, self._tick_cooldown)
+        else:
+            self.err.configure(text="Cooldown expired. You may enter your master password.")
+            if hasattr(self, "unlock_btn") and self.unlock_btn.winfo_exists():
+                self.unlock_btn.configure(state="normal")
 
     def unlock(self):
+        global _failed_attempts, _cooldown_until
+        now = time.time()
+        if now < _cooldown_until:
+            secs = int(math.ceil(_cooldown_until - now))
+            self.err.configure(text=f"Too many failed attempts. Please wait {secs}s before trying again.")
+            return
+
+        if self._unlocking:
+            return
+        self._unlocking = True
+        self.unlock_btn.configure(state="disabled")
+        self.update_idletasks()
+
         try:
             with busy(self):
                 vault = Vault.unlock(self.app.vault_path, self.pw.get())
-        except WrongMasterPassword:
-            self.err.configure(text="That master password didn't work. Check Caps Lock and try again.")
-            self.pw.set("")
+            # Successful authentication resets failed attempts counter
+            _failed_attempts = 0
+            _cooldown_until = 0.0
+            self.app.unbind("<Return>")
+            self.app.vault = vault
+            self.app.show(HomeScreen)
             return
-        self.app.unbind("<Return>")
-        self.app.vault = vault
-        self.app.show(HomeScreen)
+        except WrongMasterPassword:
+            _failed_attempts += 1
+            self.pw.set("")
+            delay = 0
+            if _failed_attempts == 4:
+                delay = 5
+            elif _failed_attempts == 5:
+                delay = 15
+            elif _failed_attempts >= 6:
+                delay = 60
+
+            if delay > 0:
+                _cooldown_until = time.time() + delay
+                self._start_cooldown_timer(delay)
+            else:
+                self.err.configure(
+                    text=f"That master password didn't work. Check Caps Lock and try again. ({_failed_attempts}/3 attempts before delay)"
+                )
+        except (json.JSONDecodeError, ValueError) as e:
+            bak_path = self.app.vault_path + ".bak"
+            if os.path.exists(bak_path):
+                if messagebox.askyesno(
+                    APP,
+                    f"Vault file appears to be corrupted or invalid:\n{e}\n\nA backup copy (.bak) exists. Would you like to restore from the backup snapshot?",
+                    parent=self.app,
+                    icon="warning"
+                ):
+                    try:
+                        shutil.copy2(bak_path, self.app.vault_path)
+                        messagebox.showinfo(APP, "Vault restored from backup snapshot. Please enter your master password.", parent=self.app)
+                        self.err.configure(text="Vault restored from backup snapshot.")
+                        return
+                    except Exception as restore_err:
+                        messagebox.showerror(APP, f"Failed to restore backup: {restore_err}", parent=self.app)
+                        return
+            self.err.configure(text=str(e))
+        finally:
+            self._unlocking = False
+            if time.time() >= _cooldown_until and hasattr(self, "unlock_btn") and self.unlock_btn.winfo_exists():
+                self.unlock_btn.configure(state="normal")
 
     def recover(self):
         key = simpledialog.askstring("Recover access",
