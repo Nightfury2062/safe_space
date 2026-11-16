@@ -23,35 +23,72 @@ _engine_instance = None
 
 
 class DATA_BLOB(ctypes.Structure):
-    _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_byte))]
+    _fields_ = [("cbData", wintypes.DWORD if hasattr(wintypes, "DWORD") else ctypes.c_ulong),
+                ("pbData", ctypes.POINTER(ctypes.c_byte))]
+
+
+def get_camera_backend():
+    """Returns the optimal OpenCV camera capture backend for the current OS."""
+    import cv2
+    if sys.platform == "win32":
+        return cv2.CAP_DSHOW
+    elif sys.platform == "darwin":
+        return cv2.CAP_AVFOUNDATION
+    elif sys.platform.startswith("linux"):
+        return cv2.CAP_V4L2
+    return 0
 
 
 def dpapi_encrypt(data: bytes, description: str = "SafeSpace Face ID") -> bytes:
-    """Encrypts bytes using Windows DPAPI, binding ciphertext to current Windows user."""
-    b_in = (ctypes.c_byte * len(data))(*data)
-    blob_in = DATA_BLOB(len(data), b_in)
-    blob_out = DATA_BLOB()
-    if not ctypes.windll.crypt32.CryptProtectData(
-        ctypes.byref(blob_in), description, None, None, None, 0, ctypes.byref(blob_out)
-    ):
-        raise OSError("Windows DPAPI CryptProtectData failed.")
-    res = bytes(ctypes.cast(blob_out.pbData, ctypes.POINTER(ctypes.c_byte * blob_out.cbData)).contents)
-    ctypes.windll.kernel32.LocalFree(blob_out.pbData)
-    return res
+    """Encrypts bytes using Windows DPAPI, binding ciphertext to current Windows user (or machine-bound AES-GCM fallback)."""
+    if sys.platform == "win32":
+        b_in = (ctypes.c_byte * len(data))(*data)
+        blob_in = DATA_BLOB(len(data), b_in)
+        blob_out = DATA_BLOB()
+        if not ctypes.windll.crypt32.CryptProtectData(
+            ctypes.byref(blob_in), description, None, None, None, 0, ctypes.byref(blob_out)
+        ):
+            raise OSError("Windows DPAPI CryptProtectData failed.")
+        res = bytes(ctypes.cast(blob_out.pbData, ctypes.POINTER(ctypes.c_byte * blob_out.cbData)).contents)
+        ctypes.windll.kernel32.LocalFree(blob_out.pbData)
+        return b"DPAPI:" + res
+    else:
+        import hashlib
+        import platform
+        import uuid
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        machine_seed = f"{platform.node()}-{uuid.getnode()}-{os.environ.get('USER', 'user')}".encode()
+        k = hashlib.sha256(b"SafeSpace-NonWin-Profile:" + machine_seed).digest()
+        nonce = os.urandom(12)
+        ct = AESGCM(k).encrypt(nonce, data, description.encode())
+        return b"AESGCM:" + nonce + ct
 
 
 def dpapi_decrypt(data: bytes) -> bytes:
-    """Decrypts bytes using Windows DPAPI."""
-    b_in = (ctypes.c_byte * len(data))(*data)
-    blob_in = DATA_BLOB(len(data), b_in)
-    blob_out = DATA_BLOB()
-    if not ctypes.windll.crypt32.CryptUnprotectData(
-        ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out)
-    ):
-        raise OSError("Windows DPAPI CryptUnprotectData failed.")
-    res = bytes(ctypes.cast(blob_out.pbData, ctypes.POINTER(ctypes.c_byte * blob_out.cbData)).contents)
-    ctypes.windll.kernel32.LocalFree(blob_out.pbData)
-    return res
+    """Decrypts bytes using Windows DPAPI or AES-GCM fallback."""
+    if data.startswith(b"AESGCM:"):
+        import hashlib
+        import platform
+        import uuid
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        payload = data[7:]
+        nonce, ct = payload[:12], payload[12:]
+        machine_seed = f"{platform.node()}-{uuid.getnode()}-{os.environ.get('USER', 'user')}".encode()
+        k = hashlib.sha256(b"SafeSpace-NonWin-Profile:" + machine_seed).digest()
+        return AESGCM(k).decrypt(nonce, ct, b"SafeSpace Biometric Profile")
+    raw = data[6:] if data.startswith(b"DPAPI:") else data
+    if sys.platform == "win32":
+        b_in = (ctypes.c_byte * len(raw))(*raw)
+        blob_in = DATA_BLOB(len(raw), b_in)
+        blob_out = DATA_BLOB()
+        if not ctypes.windll.crypt32.CryptUnprotectData(
+            ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out)
+        ):
+            raise OSError("Windows DPAPI CryptUnprotectData failed.")
+        res = bytes(ctypes.cast(blob_out.pbData, ctypes.POINTER(ctypes.c_byte * blob_out.cbData)).contents)
+        ctypes.windll.kernel32.LocalFree(blob_out.pbData)
+        return res
+    raise OSError("Windows DPAPI not supported on this platform.")
 
 
 def calculate_head_pose(kps: np.ndarray) -> tuple[str, float]:
@@ -91,12 +128,28 @@ def calculate_head_pose(kps: np.ndarray) -> tuple[str, float]:
     return pose, yaw_ratio
 
 
+def _find_model_root() -> str | None:
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        p = os.path.join(sys._MEIPASS, "insightface")
+        if os.path.exists(p):
+            return p
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    p = os.path.join(app_dir, "insightface")
+    if os.path.exists(p):
+        return p
+    return None
+
+
 class FaceAuthEngine:
     def __init__(self, threshold: float = 0.62):
         self.threshold = threshold
         from insightface.app import FaceAnalysis
         # buffalo_sc: highly optimized lightweight model suitable for real-time CPU execution
-        self.app = FaceAnalysis(name="buffalo_sc", providers=["CPUExecutionProvider"])
+        root = _find_model_root()
+        if root:
+            self.app = FaceAnalysis(name="buffalo_sc", root=root, providers=["CPUExecutionProvider"])
+        else:
+            self.app = FaceAnalysis(name="buffalo_sc", providers=["CPUExecutionProvider"])
         self.app.prepare(ctx_id=0, det_size=(320, 320))
 
     def process_frame(self, frame: np.ndarray) -> dict:
