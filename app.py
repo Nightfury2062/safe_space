@@ -19,6 +19,7 @@ import webbrowser
 from contextlib import contextmanager
 from datetime import datetime
 from tkinter import filedialog, messagebox, simpledialog, ttk
+import tkinter.font as tkfont
 
 import cv2
 import numpy as np
@@ -33,15 +34,66 @@ APP = "SafeSpace"
 VERSION = "0.1"
 NOTICE = "Course prototype (Usable Security, IIIT Delhi). Not audited: do not store real passwords."
 CATEGORIES = ["Email", "Social", "Banking", "Shopping", "Work", "Entertainment", "Other"]
+PROTECTION_POINTS = [
+    "They stay on this computer. Nothing is sent over the internet.",
+    "They are locked (encrypted) with your master password. Without it, the vault file is unreadable.",
+    "Nobody, including the SafeSpace team, can see them or reset your master password for you.",
+]
+MIN_PIN = 6            # minimum length of an entry's "Extra lock" PIN (digits only)
 ATTENTION = "Needs attention"
 ALL = "All items"
 
-BG, CARD, LINE = "#f5f6fa", "#ffffff", "#dde1ea"
-TEXT, MUTED = "#1d2433", "#5d6678"
-PRIMARY, PRIMARY_DARK = "#2f5bea", "#2447b8"
-WARN_BG, WARN_FG, BAD_FG, GOOD_FG = "#fff4d6", "#7a4b00", "#b42318", "#1a7f37"
 METER = ["#d92d20", "#f79009", "#eaaa08", "#3fa34d", "#1a7f37"]
 FONT = "Segoe UI"
+
+# Colour themes. apply_theme() copies one of these into the module-level names below,
+# so screens and dialogs built afterwards pick up the new colours.
+THEMES = {
+    "light": dict(BG="#f5f6fa", CARD="#ffffff", LINE="#dde1ea", TEXT="#1d2433", MUTED="#5d6678",
+                  PRIMARY="#2f5bea", PRIMARY_DARK="#2447b8", PRIMARY_OFF="#9db0f0",
+                  WARN_BG="#fff4d6", WARN_FG="#7a4b00", BAD_FG="#b42318", GOOD_FG="#1a7f37",
+                  FIELD="#ffffff", FIELD_RO="#dcdad5", HEAD_BG="#dcdad5",
+                  HOVER="#eeebe7", PRESSED="#bab5ab", TROUGH="#eceef3"),
+    "dark": dict(BG="#14171f", CARD="#1e232e", LINE="#2f3645", TEXT="#e6e9f0", MUTED="#9aa3b5",
+                 PRIMARY="#5b7cfa", PRIMARY_DARK="#4866e0", PRIMARY_OFF="#3c4a80",
+                 WARN_BG="#3a2e10", WARN_FG="#ffcf66", BAD_FG="#ff7b6e", GOOD_FG="#5fd27a",
+                 FIELD="#262c39", FIELD_RO="#2a3140", HEAD_BG="#2a3140",
+                 HOVER="#2d3443", PRESSED="#3a4255", TROUGH="#2a3140"),
+}
+THEME_NAMES = {"light": "Light", "dark": "Dark"}
+THEME = "light"
+BG = CARD = LINE = TEXT = MUTED = PRIMARY = PRIMARY_DARK = PRIMARY_OFF = ""
+WARN_BG = WARN_FG = BAD_FG = GOOD_FG = FIELD = FIELD_RO = HEAD_BG = HOVER = PRESSED = TROUGH = ""
+
+
+def apply_theme(name: str) -> None:
+    global THEME
+    THEME = name if name in THEMES else "light"
+    globals().update(THEMES[THEME])
+
+
+apply_theme("light")
+
+# Text size: fs() scales every font size, px() the layout sizes given in pixels
+# (row height, panel width, wrapping). Screens are rebuilt after a change.
+TEXT_SIZES = {"normal": ("Normal", 1.0), "large": ("Large", 1.2), "xlarge": ("Extra large", 1.4)}
+TEXT_SIZE, SCALE = "normal", 1.0
+
+
+def apply_text_size(name: str) -> None:
+    global TEXT_SIZE, SCALE
+    TEXT_SIZE = name if name in TEXT_SIZES else "normal"
+    SCALE = TEXT_SIZES[TEXT_SIZE][1]
+
+
+def px(n: int) -> int:
+    """A pixel size scaled to the chosen text size."""
+    return int(round(n * SCALE))
+
+
+def fs(n: int) -> int:
+    """A font point size scaled to the chosen text size."""
+    return int(round(n * SCALE))
 
 
 # ---------------------------------------------------------------- helpers
@@ -60,56 +112,114 @@ def fmt_date(ts: int) -> str:
     return datetime.fromtimestamp(ts).strftime("%d %b %Y, %H:%M") if ts else "unknown"
 
 
+_SECOND_LEVEL = {"co", "com", "net", "org", "ac", "gov", "edu", "gen", "firm", "ind", "nic"}
+
+
+def site_key(url: str) -> str:
+    """Main site of a URL, used to group logins: 'https://mail.google.com/x' -> 'google.com',
+    'amazon.co.in' -> 'amazon.co.in'. Returns '' when there is no website."""
+    host = url.strip().lower().split("://", 1)[-1]
+    host = host.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0].split("@")[-1].split(":", 1)[0]
+    if host.startswith("www."):
+        host = host[4:]
+    parts = [p for p in host.split(".") if p]
+    if len(parts) < 2 or all(p.isdigit() for p in parts):
+        return host
+    if len(parts) >= 3 and len(parts[-1]) == 2 and parts[-2] in _SECOND_LEVEL:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
+_BASE_FONT_SIZES = {}
+
+
 def setup_styles(root: tk.Tk) -> None:
     s = ttk.Style(root)
+    # Tk's built-in fonts (used by the PIN / master-password prompts) follow the text size too.
+    for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont", "TkCaptionFont"):
+        f = tkfont.nametofont(name)
+        _BASE_FONT_SIZES.setdefault(name, f.cget("size"))
+        f.configure(size=int(round(_BASE_FONT_SIZES[name] * SCALE)))
     s.theme_use("clam")
     root.configure(bg=BG)
-    s.configure(".", background=BG, foreground=TEXT, font=(FONT, 10))
+    s.configure(".", background=BG, foreground=TEXT, font=(FONT, fs(10)), fieldbackground=FIELD)
+    s.map("TButton", background=[("disabled", BG), ("pressed", PRESSED), ("active", HOVER)])
+    s.map("TMenubutton", background=[("disabled", BG), ("pressed", PRESSED), ("active", HOVER)])
+    s.configure("TEntry", insertcolor=TEXT)
+    s.configure("TCombobox", insertcolor=TEXT, arrowcolor=TEXT)
+    s.map("TCombobox", fieldbackground=[("readonly", "focus", "#4a6984"), ("readonly", FIELD_RO)],
+          foreground=[("readonly", "focus", "#ffffff")], background=[("active", HOVER)])
+    root.option_add("*TCombobox*Listbox.background", FIELD)
+    root.option_add("*TCombobox*Listbox.foreground", TEXT)
+    root.option_add("*TCombobox*Listbox.font", (FONT, fs(10)))
     s.configure("Card.TFrame", background=CARD)
     s.configure("Card.TLabel", background=CARD)
     s.configure("Muted.TLabel", foreground=MUTED)
     s.configure("CardMuted.TLabel", background=CARD, foreground=MUTED)
-    s.configure("Title.TLabel", font=(FONT, 20, "bold"))
-    s.configure("H2.TLabel", font=(FONT, 13, "bold"), background=CARD)
-    s.configure("Big.TLabel", font=(FONT, 16, "bold"), background=CARD)
-    s.configure("Mono.TLabel", font=("Consolas", 15), background=CARD)
+    s.configure("Title.TLabel", font=(FONT, fs(20), "bold"))
+    s.configure("H2.TLabel", font=(FONT, fs(13), "bold"), background=CARD)
+    s.configure("Big.TLabel", font=(FONT, fs(16), "bold"), background=CARD)
+    s.configure("Mono.TLabel", font=("Consolas", fs(15)), background=CARD)
     s.configure("TButton", padding=(10, 5))
     s.configure("Primary.TButton", background=PRIMARY, foreground="white", padding=(12, 6),
-                font=(FONT, 10, "bold"), bordercolor=PRIMARY)
-    s.map("Primary.TButton", background=[("active", PRIMARY_DARK), ("disabled", "#9db0f0")])
+                font=(FONT, fs(10), "bold"), bordercolor=PRIMARY)
+    s.map("Primary.TButton", background=[("active", PRIMARY_DARK), ("disabled", PRIMARY_OFF)])
     s.configure("Danger.TButton", foreground=BAD_FG)
     s.configure("Link.TButton", foreground=PRIMARY, background=CARD, borderwidth=0, padding=0,
-                font=(FONT, 10, "underline"))
+                font=(FONT, fs(10), "underline"))
     s.map("Link.TButton", background=[("active", CARD)])
-    s.configure("More.TMenubutton", font=(FONT, 14, "bold"), padding=(6, 0))
+    s.configure("More.TMenubutton", font=(FONT, fs(14), "bold"), padding=(6, 0))
     s.configure("Header.TFrame", background=CARD)
     s.configure("Warn.TFrame", background=WARN_BG)
-    s.configure("Warn.TLabel", background=WARN_BG, foreground=WARN_FG, font=(FONT, 10, "bold"))
+    s.configure("Warn.TLabel", background=WARN_BG, foreground=WARN_FG, font=(FONT, fs(10), "bold"))
     s.configure("TCheckbutton", background=CARD)
     s.configure("TRadiobutton", background=CARD)
-    s.configure("Treeview", rowheight=30, font=(FONT, 10), background=CARD, fieldbackground=CARD)
-    s.configure("Treeview.Heading", font=(FONT, 10, "bold"))
+    s.configure("Treeview", rowheight=px(30), font=(FONT, fs(10)), background=CARD, fieldbackground=CARD,
+                foreground=TEXT)
+    s.configure("Treeview.Heading", font=(FONT, fs(10), "bold"), background=HEAD_BG, foreground=TEXT)
+    s.map("Treeview.Heading", background=[("active", HOVER)])
     s.configure("Horizontal.TScale", background=CARD)
+    s.configure("Horizontal.TProgressbar", troughcolor=TROUGH)
+    s.configure("Vertical.TScrollbar", background=HEAD_BG, troughcolor=BG, arrowcolor=TEXT, bordercolor=LINE)
+    s.map("Vertical.TScrollbar", background=[("active", HOVER)])
     for i, c in enumerate(METER):
-        s.configure(f"M{i}.Horizontal.TProgressbar", background=c, troughcolor="#eceef3",
-                    bordercolor="#eceef3", lightcolor=c, darkcolor=c)
+        s.configure(f"M{i}.Horizontal.TProgressbar", background=c, troughcolor=TROUGH,
+                    bordercolor=TROUGH, lightcolor=c, darkcolor=c)
 
 
 class Dialog(tk.Toplevel):
     """Modal window centred on its parent."""
 
-    def __init__(self, parent, title):
+    def __init__(self, parent, title, scroll=False):
         super().__init__(parent)
         self.title(title)
         self.configure(bg=CARD)
         self.transient(parent.winfo_toplevel())
         self.resizable(False, False)
-        self.body = ttk.Frame(self, style="Card.TFrame", padding=20)
-        self.body.pack(fill="both", expand=True)
+        self._canvas = None
+        if scroll:      # body sits in a canvas so a tall dialog (e.g. with large text) can scroll
+            self._canvas = tk.Canvas(self, bg=CARD, highlightthickness=0)
+            self._sb = ttk.Scrollbar(self, orient="vertical", command=self._canvas.yview)
+            self._canvas.configure(yscrollcommand=self._sb.set)
+            self._sb.pack(side="right", fill="y")
+            self._canvas.pack(side="left", fill="both", expand=True)
+            self.body = ttk.Frame(self._canvas, style="Card.TFrame", padding=20)
+            self._canvas.create_window(0, 0, window=self.body, anchor="nw")
+            self.bind("<MouseWheel>", lambda e: self._canvas.yview_scroll(-e.delta // 120, "units"))
+        else:
+            self.body = ttk.Frame(self, style="Card.TFrame", padding=20)
+            self.body.pack(fill="both", expand=True)
         self.bind("<Escape>", lambda e: self.destroy())
 
     def show(self):
         self.update_idletasks()
+        if self._canvas:
+            w, h = self.body.winfo_reqwidth(), self.body.winfo_reqheight()
+            max_h = self.winfo_screenheight() - 140
+            self._canvas.configure(width=w, height=min(h, max_h), scrollregion=(0, 0, w, h))
+            if h <= max_h:
+                self._sb.pack_forget()
+            self.update_idletasks()
         p = self.master.winfo_toplevel()
         x = p.winfo_rootx() + (p.winfo_width() - self.winfo_reqwidth()) // 2
         y = p.winfo_rooty() + (p.winfo_height() - self.winfo_reqheight()) // 3
@@ -132,9 +242,9 @@ class StrengthMeter(ttk.Frame):
         super().__init__(parent, style=f"{style}.TFrame")
         self.bar = ttk.Progressbar(self, maximum=4, length=220, style="M0.Horizontal.TProgressbar")
         self.bar.grid(row=0, column=0, sticky="w")
-        self.label = ttk.Label(self, style=f"{style}.TLabel", font=(FONT, 10, "bold"))
+        self.label = ttk.Label(self, style=f"{style}.TLabel", font=(FONT, fs(10), "bold"))
         self.label.grid(row=0, column=1, padx=10, sticky="w")
-        self.advice = ttk.Label(self, style=f"{style}Muted.TLabel", wraplength=380)
+        self.advice = ttk.Label(self, style=f"{style}Muted.TLabel", wraplength=px(380))
         self.advice.grid(row=1, column=0, columnspan=2, sticky="w")
         self.var = var
         var.trace_add("write", lambda *a: self.refresh())
@@ -154,7 +264,7 @@ class PasswordField(ttk.Frame):
 
     def __init__(self, parent, var, width=34):
         super().__init__(parent, style="Card.TFrame")
-        self.entry = ttk.Entry(self, textvariable=var, show="•", width=width, font=(FONT, 11))
+        self.entry = ttk.Entry(self, textvariable=var, show="•", width=width, font=(FONT, fs(11)))
         self.entry.pack(side="left", fill="x", expand=True)
         self.btn = ttk.Button(self, text="Show", width=6, command=self.toggle)
         self.btn.pack(side="left", padx=(6, 0))
@@ -178,7 +288,7 @@ class NewMasterForm(ttk.Frame):
         self.meter.grid(row=2, column=0, sticky="w", pady=(0, 10))
         ttk.Label(self, text="Type it again", style="Card.TLabel").grid(row=3, column=0, sticky="w")
         PasswordField(self, self.pw2).grid(row=4, column=0, sticky="we", pady=(2, 0))
-        ttk.Label(self, style="CardMuted.TLabel", wraplength=400,
+        ttk.Label(self, style="CardMuted.TLabel", wraplength=px(400),
                   text="Tip: a short sentence you'll remember works well, e.g. "
                        "“my cat sleeps on the blue sofa”.").grid(row=5, column=0, sticky="w", pady=(8, 0))
 
@@ -204,7 +314,7 @@ def show_recovery_key(parent, key: str) -> None:
     d.unbind("<Escape>")
     b = d.body
     ttk.Label(b, text="Save your recovery key", style="Big.TLabel").pack(anchor="w")
-    ttk.Label(b, style="Card.TLabel", wraplength=460, justify="left",
+    ttk.Label(b, style="Card.TLabel", wraplength=px(460), justify="left",
               text="If you ever forget your master password, this key is the only way to get "
                    "back into SafeSpace. Nobody, including the SafeSpace team, can reset it for you.\n\n"
                    "Write it down or save it somewhere safe that isn't this computer.").pack(anchor="w", pady=(6, 12))
@@ -342,17 +452,17 @@ class EntryDialog(Dialog):
         self.pw = tk.StringVar(value=secret.get("password", preset_password))
 
         def row(r, label, hint, widget):
-            ttk.Label(b, text=label, style="Card.TLabel", font=(FONT, 10, "bold")).grid(
+            ttk.Label(b, text=label, style="Card.TLabel", font=(FONT, fs(10), "bold")).grid(
                 row=r, column=0, sticky="nw", pady=(6, 0), padx=(0, 14))
             widget.grid(row=r, column=1, sticky="we", pady=(6, 0))
             if hint:
                 ttk.Label(b, text=hint, style="CardMuted.TLabel").grid(row=r + 1, column=1, sticky="w")
 
-        name = ttk.Entry(b, textvariable=self.v["name"], width=40, font=(FONT, 11))
+        name = ttk.Entry(b, textvariable=self.v["name"], width=40, font=(FONT, fs(11)))
         row(1, "Name", "What you'll search for, e.g. Gmail or My bank", name)
         row(3, "Website", "Optional, e.g. mail.google.com", ttk.Entry(b, textvariable=self.v["url"], width=40,
-                                                                      font=(FONT, 11)))
-        row(5, "Username / email", None, ttk.Entry(b, textvariable=self.v["username"], width=40, font=(FONT, 11)))
+                                                                      font=(FONT, fs(11))))
+        row(5, "Username / email", None, ttk.Entry(b, textvariable=self.v["username"], width=40, font=(FONT, fs(11))))
 
         pwrow = ttk.Frame(b, style="Card.TFrame")
         self.pwfield = PasswordField(pwrow, self.pw, width=28)
@@ -363,9 +473,10 @@ class EntryDialog(Dialog):
 
         row(8, "Category", None, ttk.Combobox(b, textvariable=self.v["category"], values=CATEGORIES,
                                               state="readonly", width=20))
-        ttk.Label(b, text="Notes", style="Card.TLabel", font=(FONT, 10, "bold")).grid(
+        ttk.Label(b, text="Notes", style="Card.TLabel", font=(FONT, fs(10), "bold")).grid(
             row=9, column=0, sticky="nw", pady=(6, 0))
-        self.notes = tk.Text(b, width=40, height=3, font=(FONT, 10), relief="solid", borderwidth=1)
+        self.notes = tk.Text(b, width=40, height=3, font=(FONT, fs(10)), relief="solid", borderwidth=1,
+                             bg=FIELD, fg=TEXT, insertbackground=TEXT)
         self.notes.insert("1.0", secret.get("notes", ""))
         self.notes.grid(row=9, column=1, sticky="we", pady=(6, 0))
 
@@ -381,6 +492,7 @@ class EntryDialog(Dialog):
         ttk.Entry(self.pinfields, textvariable=self.pin, show="•", width=10).pack(side="left", padx=6)
         ttk.Label(self.pinfields, text="Again", style="Card.TLabel").pack(side="left")
         ttk.Entry(self.pinfields, textvariable=self.pin2, show="•", width=10).pack(side="left", padx=6)
+        ttk.Label(self.pinfields, text=f"At least {MIN_PIN} digits", style="CardMuted.TLabel").pack(side="left")
         self.toggle_pin()
 
         btns = ttk.Frame(b, style="Card.TFrame")
@@ -414,8 +526,9 @@ class EntryDialog(Dialog):
         pin = ""
         if self.use_pin.get():
             pin = self.pin.get()
-            if len(pin) < 4:
-                messagebox.showwarning(APP, "The PIN needs at least 4 characters.", parent=self)
+            if len(pin) < MIN_PIN or not pin.isdigit():
+                messagebox.showwarning(APP, f"The PIN needs at least {MIN_PIN} digits (numbers only).",
+                                       parent=self)
                 return
             if pin != self.pin2.get():
                 messagebox.showwarning(APP, "The two PINs don't match.", parent=self)
@@ -451,7 +564,7 @@ class ExportDialog(Dialog):
              "Entries with an extra PIN are left out."),
         ]:
             ttk.Radiobutton(b, text=title, value=val, variable=self.kind).pack(anchor="w", pady=(12, 0))
-            ttk.Label(b, text=desc, style="CardMuted.TLabel", wraplength=420).pack(anchor="w", padx=(22, 0))
+            ttk.Label(b, text=desc, style="CardMuted.TLabel", wraplength=px(420)).pack(anchor="w", padx=(22, 0))
         btns = ttk.Frame(b, style="Card.TFrame")
         btns.pack(fill="x", pady=(18, 0))
         ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="right")
@@ -543,7 +656,7 @@ class FaceEnrollDialog(Dialog):
         b = self.body
         ttk.Label(b, text="Set up Face ID", style="H2.TLabel").pack(anchor="w", pady=(0, 4))
         ttk.Label(b, text="Look directly at the camera with good lighting. Hold still while SafeSpace captures your face profile.",
-                  style="CardMuted.TLabel", wraplength=380).pack(anchor="w", pady=(0, 10))
+                  style="CardMuted.TLabel", wraplength=px(380)).pack(anchor="w", pady=(0, 10))
 
         self.canvas = tk.Canvas(b, width=360, height=270, bg="#1a1d24", highlightthickness=0)
         self.canvas.pack(pady=(0, 10))
@@ -551,7 +664,7 @@ class FaceEnrollDialog(Dialog):
         self.progress = ttk.Progressbar(b, maximum=self.needed, length=360)
         self.progress.pack(pady=(0, 8))
 
-        self.status_lbl = ttk.Label(b, text="Starting camera...", style="Card.TLabel", font=(FONT, 10, "bold"))
+        self.status_lbl = ttk.Label(b, text="Starting camera...", style="Card.TLabel", font=(FONT, fs(10), "bold"))
         self.status_lbl.pack(anchor="center", pady=(0, 12))
 
         btns = ttk.Frame(b, style="Card.TFrame")
@@ -687,7 +800,7 @@ class FaceUnlockDialog(Dialog):
         self.canvas = tk.Canvas(b, width=360, height=270, bg="#1a1d24", highlightthickness=0)
         self.canvas.pack(pady=(0, 10))
 
-        self.status_lbl = ttk.Label(b, text="Starting camera...", style="Card.TLabel", font=(FONT, 10, "bold"))
+        self.status_lbl = ttk.Label(b, text="Starting camera...", style="Card.TLabel", font=(FONT, fs(10), "bold"))
         self.status_lbl.pack(anchor="center", pady=(0, 12))
 
         btns = ttk.Frame(b, style="Card.TFrame")
@@ -829,7 +942,7 @@ class FaceUnlockDialog(Dialog):
 
 class AccountDialog(Dialog):
     def __init__(self, app):
-        super().__init__(app, "Account & security")
+        super().__init__(app, "Account & security", scroll=True)
         self.app = app
         v = app.vault
         b = self.body
@@ -839,7 +952,7 @@ class AccountDialog(Dialog):
             ttk.Separator(b).grid(row=r, column=0, columnspan=2, sticky="we", pady=12)
             ttk.Label(b, text=title, style="H2.TLabel").grid(row=r + 1, column=0, columnspan=2, sticky="w")
             if text:
-                ttk.Label(b, text=text, style="CardMuted.TLabel", wraplength=480, justify="left").grid(
+                ttk.Label(b, text=text, style="CardMuted.TLabel", wraplength=px(480), justify="left").grid(
                     row=r + 2, column=0, columnspan=2, sticky="w", pady=(2, 6))
 
         section(1, "How your vault is protected",
@@ -857,7 +970,7 @@ class AccountDialog(Dialog):
                 f"Current recovery key created: {fmt_date(v.recovery_created)}")
         ttk.Button(b, text="Create a new recovery key…", command=self.new_recovery).grid(row=11, column=0, sticky="w")
 
-        section(12, "Security settings", "")
+        section(12, "Settings", "")
         self.autolock = tk.StringVar(value=self._autolock_label(v.settings.get("autolock_min", 5)))
         r = ttk.Frame(b, style="Card.TFrame")
         r.grid(row=15, column=0, columnspan=2, sticky="w")
@@ -876,24 +989,38 @@ class AccountDialog(Dialog):
         cb2.pack(side="left", padx=6)
         cb2.bind("<<ComboboxSelected>>",
                  lambda e: v.set_setting("clip_clear_s", int(self.clip.get().split()[0])))
+        r3 = ttk.Frame(b, style="Card.TFrame")
+        r3.grid(row=17, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ttk.Label(r3, text="Appearance", style="Card.TLabel").pack(side="left")
+        self.theme = tk.StringVar(value=THEME_NAMES[THEME])
+        cb3 = ttk.Combobox(r3, textvariable=self.theme, state="readonly", width=12,
+                           values=list(THEME_NAMES.values()))
+        cb3.pack(side="left", padx=6)
+        cb3.bind("<<ComboboxSelected>>", self.set_theme)
+        ttk.Label(r3, text="Text size", style="Card.TLabel").pack(side="left", padx=(12, 0))
+        self.text_size = tk.StringVar(value=TEXT_SIZES[TEXT_SIZE][0])
+        cb4 = ttk.Combobox(r3, textvariable=self.text_size, state="readonly", width=12,
+                           values=[label for label, _ in TEXT_SIZES.values()])
+        cb4.pack(side="left", padx=6)
+        cb4.bind("<<ComboboxSelected>>", self.set_text_size)
 
-        section(17, "Face ID (Biometric Unlock)",
+        section(18, "Face ID (Biometric Unlock)",
                 "Unlock your vault using facial recognition on this computer. "
                 "SafeSpace never saves your image; only an encrypted mathematical template is stored with Windows DPAPI.")
         self.face_status_lbl = ttk.Label(b, text="", style="Card.TLabel")
-        self.face_status_lbl.grid(row=20, column=0, columnspan=2, sticky="w", pady=(2, 6))
+        self.face_status_lbl.grid(row=21, column=0, columnspan=2, sticky="w", pady=(2, 6))
         self.face_btn_frame = ttk.Frame(b, style="Card.TFrame")
-        self.face_btn_frame.grid(row=21, column=0, columnspan=2, sticky="w")
+        self.face_btn_frame.grid(row=22, column=0, columnspan=2, sticky="w")
         self._refresh_face_section()
 
-        section(22, "Delete account",
+        section(23, "Delete account",
                 "Permanently erases your vault from this computer. Make an encrypted backup (Export) first "
                 "if you might need your passwords again. This cannot be undone.")
         ttk.Button(b, text="Delete account and all data…", style="Danger.TButton",
-                   command=self.delete_account).grid(row=25, column=0, sticky="w")
+                   command=self.delete_account).grid(row=26, column=0, sticky="w")
 
         btns = ttk.Frame(b, style="Card.TFrame")
-        btns.grid(row=26, column=0, columnspan=2, sticky="e", pady=(16, 0))
+        btns.grid(row=27, column=0, columnspan=2, sticky="e", pady=(16, 0))
         ttk.Button(btns, text="Close", command=self.destroy).pack(side="right")
         ttk.Button(btns, text="Lock now", command=lambda: (self.destroy(), app.lock())).pack(side="right", padx=6)
 
@@ -904,6 +1031,22 @@ class AccountDialog(Dialog):
     def set_autolock(self, _e=None):
         t = self.autolock.get()
         self.app.vault.set_setting("autolock_min", 0 if t == "Never" else int(t.split()[0]))
+
+    def set_theme(self, _e=None):
+        name = next(k for k, label in THEME_NAMES.items() if label == self.theme.get())
+        if name == THEME:
+            return
+        self.app.vault.set_setting("theme", name)
+        self.destroy()                     # widgets keep their old colours, so rebuild the screen
+        self.app.set_appearance(theme=name)
+
+    def set_text_size(self, _e=None):
+        name = next(k for k, (label, _) in TEXT_SIZES.items() if label == self.text_size.get())
+        if name == TEXT_SIZE:
+            return
+        self.app.vault.set_setting("text_size", name)
+        self.destroy()
+        self.app.set_appearance(text_size=name)
 
     def change_master(self):
         if not self.app.confirm_master(self, "Enter your current master password."):
@@ -985,15 +1128,22 @@ class SetupScreen(ttk.Frame):
         self.app = app
         card = ttk.Frame(self, style="Card.TFrame", padding=32)
         card.place(relx=0.5, rely=0.45, anchor="center")
-        ttk.Label(card, text="Welcome to SafeSpace", style="Big.TLabel", font=(FONT, 20, "bold")).pack(anchor="w")
-        ttk.Label(card, style="Card.TLabel", wraplength=420, justify="left",
+        ttk.Label(card, text="Welcome to SafeSpace", style="Big.TLabel", font=(FONT, fs(20), "bold")).pack(anchor="w")
+        ttk.Label(card, style="Card.TLabel", wraplength=px(420), justify="left",
                   text="SafeSpace remembers your passwords in an encrypted vault on this computer. "
                        "You only need to remember one password: your master password.").pack(anchor="w", pady=(6, 8))
-        ttk.Label(card, text="⚠ " + NOTICE, style="Card.TLabel", foreground=WARN_FG, wraplength=420,
+        box = ttk.Frame(card, style="Card.TFrame", padding=(12, 8), relief="solid", borderwidth=1)
+        box.pack(fill="x", pady=(0, 10))
+        ttk.Label(box, text="\U0001F512  How your passwords are protected", style="Card.TLabel",
+                  font=(FONT, fs(10), "bold")).pack(anchor="w")
+        for line in PROTECTION_POINTS:
+            ttk.Label(box, text="•  " + line, style="CardMuted.TLabel", wraplength=px(400),
+                      justify="left").pack(anchor="w", pady=(2, 0))
+        ttk.Label(card, text="⚠ " + NOTICE, style="Card.TLabel", foreground=WARN_FG, wraplength=px(420),
                   justify="left").pack(anchor="w", pady=(0, 14))
         self.form = NewMasterForm(card)
         self.form.pack(anchor="w")
-        ttk.Label(card, style="CardMuted.TLabel", wraplength=420,
+        ttk.Label(card, style="CardMuted.TLabel", wraplength=px(420),
                   text="Next you'll get a recovery key in case you ever forget it.").pack(anchor="w", pady=(12, 0))
         ttk.Button(card, text="Create my vault", style="Primary.TButton", command=self.create).pack(anchor="e",
                                                                                                     pady=(16, 0))
@@ -1018,7 +1168,7 @@ class UnlockScreen(ttk.Frame):
         self.app = app
         card = ttk.Frame(self, style="Card.TFrame", padding=32)
         card.place(relx=0.5, rely=0.42, anchor="center")
-        ttk.Label(card, text="\U0001F512  SafeSpace", style="Big.TLabel", font=(FONT, 22, "bold")).pack(anchor="w")
+        ttk.Label(card, text="\U0001F512  SafeSpace", style="Big.TLabel", font=(FONT, fs(22), "bold")).pack(anchor="w")
         ttk.Label(card, text="Unlock your vault to view passwords.", style="Card.TLabel").pack(anchor="w",
                                                                                                pady=(4, 14))
         if message:
@@ -1113,24 +1263,26 @@ class HomeScreen(ttk.Frame):
         self.filter = ALL
         self.selected = None
         self.revealed = None           # (lid, secret, pin) for the selected entry only
+        self.collapsed = set()         # website groups the user has folded up
 
         # Header
         hdr = ttk.Frame(self, style="Header.TFrame", padding=(16, 10))
         hdr.pack(fill="x")
         ttk.Label(hdr, text="\U0001F512 SafeSpace", style="Big.TLabel").pack(side="left")
         self.q = tk.StringVar()
-        sbox = ttk.Frame(hdr, style="Header.TFrame")
-        sbox.pack(side="left", padx=24, fill="x", expand=True)
-        ttk.Label(sbox, text="\U0001F50D", style="Card.TLabel").pack(side="left")
-        self.search = ttk.Entry(sbox, textvariable=self.q, font=(FONT, 11))
-        self.search.pack(side="left", fill="x", expand=True, padx=4)
-        self._placeholder()
         ttk.Button(hdr, text="⚙ Account", command=lambda: AccountDialog(app).show()).pack(side="right")
         ttk.Button(hdr, text="Export", command=lambda: ExportDialog(app).show()).pack(side="right", padx=4)
         ttk.Button(hdr, text="Import", command=lambda: do_import(app)).pack(side="right")
         ttk.Button(hdr, text="PassGen", command=lambda: PassGenDialog(app, app).show()).pack(side="right", padx=4)
         ttk.Button(hdr, text="+ Add login", style="Primary.TButton",
                    command=lambda: EntryDialog(app).show()).pack(side="right", padx=4)
+        # Packed after the buttons so the search box, not a button, gives way on narrow windows.
+        sbox = ttk.Frame(hdr, style="Header.TFrame")
+        sbox.pack(side="left", padx=24, fill="x", expand=True)
+        ttk.Label(sbox, text="\U0001F50D", style="Card.TLabel").pack(side="left")
+        self.search = ttk.Entry(sbox, textvariable=self.q, font=(FONT, fs(11)), width=12)
+        self.search.pack(side="left", fill="x", expand=True, padx=4)
+        self._placeholder()
         self.sep = ttk.Separator(self)
         self.sep.pack(fill="x")
 
@@ -1150,7 +1302,8 @@ class HomeScreen(ttk.Frame):
         side.pack(side="left", fill="y")
         ttk.Label(side, text="Categories", style="H2.TLabel").pack(anchor="w", padx=4, pady=(0, 6))
         self.cats = tk.Listbox(side, width=24, activestyle="none", borderwidth=0, highlightthickness=0,
-                               font=(FONT, 11), exportselection=False, selectbackground=PRIMARY, selectforeground="white", bg=CARD)
+                               font=(FONT, fs(11)), exportselection=False, selectbackground=PRIMARY, selectforeground="white", bg=CARD,
+                               fg=TEXT)
         self.cats.pack(fill="y", expand=True)
         self.cats.bind("<<ListboxSelect>>", self._on_cat)
 
@@ -1163,17 +1316,19 @@ class HomeScreen(ttk.Frame):
         for col, text, w in [("#0", "Name", 160), ("user", "Username", 170), ("site", "Website", 120),
                              ("strength", "Password", 105)]:
             self.tree.heading(col, text=text, anchor="w")
-            self.tree.column(col, width=w, minwidth=60, anchor="w", stretch=col != "strength")
+            self.tree.column(col, width=px(w), minwidth=px(60), anchor="w", stretch=col != "strength")
         self.tree.tag_configure("weak", foreground=BAD_FG)
-        self.tree.tag_configure("reused", foreground=WARN_FG)
+        self.tree.tag_configure("group", foreground=MUTED, font=(FONT, fs(10), "bold"))
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
+        self.tree.bind("<<TreeviewOpen>>", lambda e: self.collapsed.discard(self.tree.focus()))
+        self.tree.bind("<<TreeviewClose>>", lambda e: self.collapsed.add(self.tree.focus()))
         self.tree.bind("<Double-1>", lambda e: self.edit())
         self.tree.bind("<Button-3>", self._context)
-        self.empty = ttk.Label(mid, style="CardMuted.TLabel", justify="center", font=(FONT, 11))
+        self.empty = ttk.Label(mid, style="CardMuted.TLabel", justify="center", font=(FONT, fs(11)))
 
         # Detail
-        self.detail = ttk.Frame(body, style="Card.TFrame", padding=18, width=340)
+        self.detail = ttk.Frame(body, style="Card.TFrame", padding=18, width=px(340))
         self.detail.pack(side="right", fill="y", before=mid)
         self.detail.pack_propagate(False)
 
@@ -1207,8 +1362,7 @@ class HomeScreen(ttk.Frame):
     # ---- data
     def attention_ids(self) -> set:
         v = self.app.vault
-        weak = {lid for lid, m in v.items.items() if passgen.is_weak(m.get("strength", 4))}
-        return weak | v.reused_ids()
+        return {lid for lid, m in v.items.items() if passgen.is_weak(m.get("strength", 4))}
 
     def set_filter(self, f):
         self.filter = f
@@ -1225,13 +1379,12 @@ class HomeScreen(ttk.Frame):
         if v is None:
             return
         attention = self.attention_ids()
-        reused = v.reused_ids()
 
         # banner
         if attention:
             n = len(attention)
             self.banner_text.configure(
-                text=f"⚠  {n} of your saved password{'s are' if n != 1 else ' is'} weak or used more than once.")
+                text=f"⚠  {n} of your saved passwords {'are' if n != 1 else 'is'} weak.")
             self.banner.pack(fill="x", after=self.sep)
         else:
             self.banner.pack_forget()
@@ -1269,16 +1422,28 @@ class HomeScreen(ttk.Frame):
             rows.append((lid, m))
         rows.sort(key=lambda r: r[1]["name"].lower())
         self.tree.delete(*self.tree.get_children())
+        # Two or more shown logins on the same website go under one group row.
+        sites = {lid: site_key(m.get("url", "")) for lid, m in rows}
+        per_site = {}
+        for s in sites.values():
+            if s:
+                per_site[s] = per_site.get(s, 0) + 1
         for lid, m in rows:
+            parent = ""
+            s = sites[lid]
+            if per_site.get(s, 0) > 1:
+                parent = "grp:" + s
+                if not self.tree.exists(parent):
+                    self.tree.insert("", "end", iid=parent, text=f"\U0001F310 {s}",
+                                     values=(f"{per_site[s]} logins", "", ""),
+                                     open=parent not in self.collapsed, tags=("group",))
             score = m.get("strength", 4)
             if passgen.is_weak(score):
                 st, tag = "⚠ " + passgen.LABELS[score], "weak"
-            elif lid in reused:
-                st, tag = "⚠ Reused", "reused"
             else:
                 st, tag = passgen.LABELS[score], ""
             name = m["name"] + ("  \U0001F511" if m.get("has_pin") else "")
-            self.tree.insert("", "end", iid=lid, text=name, values=(m.get("username", ""), m.get("url", ""), st),
+            self.tree.insert(parent, "end", iid=lid, text=name, values=(m.get("username", ""), m.get("url", ""), st),
                              tags=(tag,))
         self.list_title.configure(text=f"{self.filter}  ·  {len(rows)} shown")
 
@@ -1292,8 +1457,9 @@ class HomeScreen(ttk.Frame):
         else:
             self.empty.place_forget()
 
-        target = select or (self.selected if self.selected in self.tree.get_children() else None)
+        target = select or self.selected
         if target and self.tree.exists(target):
+            self.collapsed.discard(self.tree.parent(target))     # see() below unfolds its group
             self.tree.selection_set(target)
             self.tree.see(target)
         else:
@@ -1305,6 +1471,8 @@ class HomeScreen(ttk.Frame):
     def _on_select(self, _e=None):
         sel = self.tree.selection()
         lid = sel[0] if sel else None
+        if lid not in self.app.vault.items:          # a website group row, not a login
+            lid = None
         if lid != self.selected:
             self.revealed = None
         self.selected = lid
@@ -1317,17 +1485,18 @@ class HomeScreen(ttk.Frame):
         v = self.app.vault
         if not self.selected or self.selected not in v.items:
             ttk.Label(d, text="Select a login to see its details.", style="CardMuted.TLabel",
-                      wraplength=290).pack(anchor="w")
+                      wraplength=px(290)).pack(anchor="w")
             return
         lid, m = self.selected, v.items[self.selected]
         sec = self.revealed[1] if self.revealed and self.revealed[0] == lid else None
 
         top = ttk.Frame(d, style="Card.TFrame")
         top.pack(fill="x")
-        ttk.Label(top, text=m["name"], style="Big.TLabel", wraplength=240).pack(side="left", anchor="w")
+        ttk.Label(top, text=m["name"], style="Big.TLabel", wraplength=px(170)).pack(side="left", anchor="w")
         more = ttk.Menubutton(top, text="⋯", width=3, style="More.TMenubutton")
         more.pack(side="right")
         more["menu"] = self._menu(more, lid)
+        ttk.Button(top, text="✎ Edit", command=self.edit).pack(side="right", padx=(0, 4))
         sub = m.get("category", "Other") + ("   \U0001F511 Extra PIN" if m.get("has_pin") else "")
         ttk.Label(d, text=sub, style="CardMuted.TLabel").pack(anchor="w", pady=(2, 14))
 
@@ -1335,7 +1504,7 @@ class HomeScreen(ttk.Frame):
             ttk.Label(d, text=label, style="CardMuted.TLabel").pack(anchor="w")
             r = ttk.Frame(d, style="Card.TFrame")
             r.pack(fill="x", pady=(0, 10))
-            ttk.Label(r, text=value or "—", style="Card.TLabel", font=(FONT, 11), wraplength=180).pack(
+            ttk.Label(r, text=value or "—", style="Card.TLabel", font=(FONT, fs(11)), wraplength=px(180)).pack(
                 side="left")
             for text, cmd in reversed(buttons):
                 ttk.Button(r, text=text, command=cmd, width=6).pack(side="right", padx=(4, 0))
@@ -1348,31 +1517,30 @@ class HomeScreen(ttk.Frame):
               [("Hide" if sec else "Show", self.toggle_reveal), ("Copy", self.copy_password)])
 
         score = m.get("strength", 4)
-        reused = lid in v.reused_ids()
-        if passgen.is_weak(score) or reused:
+        if passgen.is_weak(score):
             box = ttk.Frame(d, style="Warn.TFrame", padding=10)
             box.pack(fill="x", pady=(0, 10))
-            why = f"This password is {passgen.LABELS[score].lower()}." if passgen.is_weak(score) else \
-                "You use this same password for another login."
-            ttk.Label(box, text="⚠ " + why, style="Warn.TLabel", wraplength=250).pack(anchor="w")
+            why = f"This password is {passgen.LABELS[score].lower()}."
+            ttk.Label(box, text="⚠ " + why, style="Warn.TLabel", wraplength=px(250)).pack(anchor="w")
             ttk.Label(box, text="Change it on the website, then save the new one here. "
                                 "PassGen can make a strong one for you.", background=WARN_BG, foreground=WARN_FG,
-                      wraplength=250).pack(anchor="w", pady=(4, 6))
+                      wraplength=px(250)).pack(anchor="w", pady=(4, 6))
             ttk.Button(box, text="Update password…", command=lambda: self.edit(regenerate=True)).pack(anchor="w")
         else:
             ttk.Label(d, text="Password strength", style="CardMuted.TLabel").pack(anchor="w")
             ttk.Label(d, text=passgen.LABELS[score], style="Card.TLabel", foreground=METER[score],
-                      font=(FONT, 10, "bold")).pack(anchor="w", pady=(0, 10))
+                      font=(FONT, fs(10), "bold")).pack(anchor="w", pady=(0, 10))
 
         if sec and sec.get("notes"):
             ttk.Label(d, text="Notes", style="CardMuted.TLabel").pack(anchor="w")
-            ttk.Label(d, text=sec["notes"], style="Card.TLabel", wraplength=290, justify="left").pack(anchor="w",
+            ttk.Label(d, text=sec["notes"], style="Card.TLabel", wraplength=px(290), justify="left").pack(anchor="w",
                                                                                                     pady=(0, 10))
         ttk.Label(d, text=f"Last updated {fmt_date(m.get('updated', 0))}", style="CardMuted.TLabel").pack(
             side="bottom", anchor="w")
 
     def _menu(self, parent, lid):
-        menu = tk.Menu(parent, tearoff=False, font=(FONT, 10))
+        menu = tk.Menu(parent, tearoff=False, font=(FONT, fs(10)), bg=CARD, fg=TEXT,
+                       activebackground=PRIMARY, activeforeground="white")
         m = self.app.vault.items[lid]
         menu.add_command(label="Edit", command=self.edit)
         menu.add_command(label="Copy username", command=lambda: self.app.copy(m.get("username", ""), "Username"))
@@ -1385,7 +1553,7 @@ class HomeScreen(ttk.Frame):
 
     def _context(self, e):
         row = self.tree.identify_row(e.y)
-        if row:
+        if row in self.app.vault.items:
             self.tree.selection_set(row)
             self._on_select()
             self._menu(self.tree, row).tk_popup(e.x_root, e.y_root)
@@ -1443,7 +1611,11 @@ class App(tk.Tk):
         self.title(f"{APP} {VERSION} — course prototype")
         self.geometry("1180x720")
         self.minsize(980, 600)
+        apply_theme(Vault.read_setting(vault_path, "theme", "light"))
+        apply_text_size(Vault.read_setting(vault_path, "text_size", "normal"))
         setup_styles(self)
+        if TEXT_SIZE != "normal":          # bigger text needs a bigger window
+            self.state("zoomed")
         self.vault_path, self.demo_hint = vault_path, demo_hint
         self.vault: Vault | None = None
         self.home = None
@@ -1474,6 +1646,21 @@ class App(tk.Tk):
 
     def status(self, msg):
         self.statusbar.configure(text=msg or NOTICE)
+
+    def set_appearance(self, theme=None, text_size=None):
+        if theme:
+            apply_theme(theme)
+        if text_size:
+            apply_text_size(text_size)
+            if TEXT_SIZE != "normal":
+                self.state("zoomed")
+        setup_styles(self)
+        if self.vault:
+            self.show(HomeScreen)
+        if theme:
+            self.status(f"{THEME_NAMES[THEME]} theme on.")
+        else:
+            self.status(f"Text size: {TEXT_SIZES[TEXT_SIZE][0]}.")
 
     # ---- security helpers
     def copy(self, text, what):
@@ -1563,7 +1750,8 @@ DEMO_ITEMS = [
     ("Outlook (work)", "outlook.office.com", "a.morgan@contoso.com", "Work", "Summer2024!", ""),
     ("Facebook", "facebook.com", "alex.morgan@gmail.com", "Social", "alex1990", ""),
     ("Instagram", "instagram.com", "alexm_photos", "Social", "Willow-Cactus-Meteor-42", ""),
-    ("HDFC NetBanking", "netbanking.hdfcbank.com", "alexm88", "Banking", "pB7$kd29!Qe#Lm3z", "1234"),
+    ("Instagram (studio)", "instagram.com", "alexm_studio", "Social", "Copper-Lantern-Quiver-63", ""),
+    ("HDFC NetBanking", "netbanking.hdfcbank.com", "alexm88", "Banking", "pB7$kd29!Qe#Lm3z", "246810"),
     ("Amazon", "amazon.in", "alex.morgan@gmail.com", "Shopping", "alex1990", ""),
     ("Flipkart", "flipkart.com", "9876543210", "Shopping", "Marble-Ember-Harbor-Violet-17", ""),
     ("Netflix", "netflix.com", "alex.morgan@gmail.com", "Entertainment", "qwerty123", ""),
@@ -1599,7 +1787,7 @@ def main():
         path = args.vault or os.path.join(here, "demo_vault.json")
         print("Building demo vault...")
         build_demo_vault(path)
-        hint = f"Demo vault — master password: {DEMO_PASSWORD}   (HDFC PIN: 1234)"
+        hint = f"Demo vault — master password: {DEMO_PASSWORD}   (HDFC PIN: 246810)"
     App(path, hint).mainloop()
 
 

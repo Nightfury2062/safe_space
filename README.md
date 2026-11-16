@@ -20,8 +20,9 @@ python app.py            # your own vault, stored in %APPDATA%\SafeSpace\vault.j
 python -m unittest test_vault -v
 ```
 
-Demo vault: master password `SafeSpace demo 2026`; the HDFC entry has an extra PIN `1234`.
-It holds 10 logins, 4 of them weak or reused, so the warning banner shows up for Task 5.
+Demo vault: master password `SafeSpace demo 2026`; the HDFC entry has an extra PIN `246810` (Extra-lock PINs must be at least 6 digits).
+It holds 11 logins, 4 of them weak, so the warning banner shows up for Task 5.
+The two Instagram logins appear under one "instagram.com" group in the list.
 
 ## Where each study task lives
 
@@ -30,10 +31,10 @@ It holds 10 logins, 4 of them weak or reused, so the warning banner shows up for
 | Home-screen first impression | Header: search, **+ Add login**, **PassGen**, **Import**, **Export**, **⚙ Account**; yellow warning banner; categories sidebar |
 | 1. Add a credential | **+ Add login** → name / website / username / password / category / notes |
 | 2. Generate a strong password | **PassGen** button (standalone, then "Save as new login…") or **Generate…** inside the add/edit form ("Use this password") |
-| 3. Find a password | Search box (name, website, username) and category sidebar |
-| 4. Edit an entry | Select a login → **⋯** menu → Edit (also double-click or right-click a row) |
+| 3. Find a password | Search box (name, website, username) and category sidebar; logins on the same website are grouped |
+| 4. Edit an entry | Select a login → **✎ Edit** in the details panel (also **⋯** menu, double-click or right-click a row) |
 | 5. Weak-password warning | Banner → **Review them** → "Needs attention" list → **Update password…** |
-| 6. Security / account | **⚙ Account**: how the vault is protected, change master password, recovery key, auto-lock, clipboard clearing, delete account |
+| 6. Security / account | **⚙ Account**: how the vault is protected, change master password, recovery key, auto-lock, clipboard clearing, light/dark appearance, text size (Normal / Large / Extra large), delete account |
 
 ## Security design
 

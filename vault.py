@@ -211,6 +211,14 @@ class Vault:
     def settings(self) -> dict:
         return self._data.setdefault("settings", {"autolock_min": 5})
 
+    @classmethod
+    def read_setting(cls, path: str, key: str, default=None):
+        """Reads a non-secret setting (e.g. the colour theme) without unlocking the vault."""
+        try:
+            return cls._read(path).get("settings", {}).get(key, default)
+        except Exception:
+            return default
+
     def set_setting(self, key: str, value) -> None:
         self.settings[key] = value
         self.save()
