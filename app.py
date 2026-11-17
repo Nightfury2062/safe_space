@@ -26,7 +26,7 @@ import tkinter.font as tkfont
 
 import cv2
 import numpy as np
-from PIL import Image, ImageTk
+from PIL import Image, ImageDraw, ImageFont, ImageTk
 
 import face_auth
 import passgen
@@ -50,27 +50,81 @@ MIN_PIN = 6            # minimum length of an entry's "Extra lock" PIN (digits o
 ATTENTION = "Needs attention"
 ALL = "All items"
 
-METER = ["#d92d20", "#f79009", "#eaaa08", "#3fa34d", "#1a7f37"]
-FONT = "Segoe UI"
+METER = ["#ef4444", "#f97316", "#eab308", "#10b981", "#059669"]
 
-# Colour themes. apply_theme() copies one of these into the module-level names below,
-# so screens and dialogs built afterwards pick up the new colours.
+def _detect_font() -> str:
+    try:
+        fams = set(tkfont.families())
+        for f in ("Segoe UI Variable Text", "Segoe UI", "SF Pro Text", "Inter", "Helvetica"):
+            if f in fams:
+                return f
+    except Exception:
+        pass
+    return "Segoe UI"
+
+FONT = _detect_font()
+
+# Modern, clean color themes (Slate & Blue palette). apply_theme() copies one of these
+# into module-level variables so screens and dialogs pick up the new colors dynamically.
 THEMES = {
-    "light": dict(BG="#f5f6fa", CARD="#ffffff", LINE="#dde1ea", TEXT="#1d2433", MUTED="#5d6678",
-                  PRIMARY="#2f5bea", PRIMARY_DARK="#2447b8", PRIMARY_OFF="#9db0f0",
-                  WARN_BG="#fff4d6", WARN_FG="#7a4b00", BAD_FG="#b42318", GOOD_FG="#1a7f37",
-                  FIELD="#ffffff", FIELD_RO="#dcdad5", HEAD_BG="#dcdad5",
-                  HOVER="#eeebe7", PRESSED="#bab5ab", TROUGH="#eceef3"),
-    "dark": dict(BG="#14171f", CARD="#1e232e", LINE="#2f3645", TEXT="#e6e9f0", MUTED="#9aa3b5",
-                 PRIMARY="#5b7cfa", PRIMARY_DARK="#4866e0", PRIMARY_OFF="#3c4a80",
-                 WARN_BG="#3a2e10", WARN_FG="#ffcf66", BAD_FG="#ff7b6e", GOOD_FG="#5fd27a",
-                 FIELD="#262c39", FIELD_RO="#2a3140", HEAD_BG="#2a3140",
-                 HOVER="#2d3443", PRESSED="#3a4255", TROUGH="#2a3140"),
+    "light": dict(
+        BG="#f8fafc",               # Clean slate-50 background
+        CARD="#ffffff",             # Pure white elevated card
+        LINE="#e2e8f0",             # Slate-200 clean 1px border
+        LINE_SUBTLE="#f1f5f9",      # Slate-100 very soft divider
+        TEXT="#0f172a",             # Slate-900 deep charcoal
+        MUTED="#64748b",            # Slate-500 refined secondary grey
+        PRIMARY="#2563eb",          # Modern Blue-600 (vibrant accent)
+        PRIMARY_DARK="#1d4ed8",     # Blue-700 active/pressed
+        PRIMARY_OFF="#93c5fd",      # Blue-300 disabled
+        PRIMARY_LIGHT="#eff6ff",    # Blue-50 soft selection highlight
+        WARN_BG="#fffbeb",          # Amber-50 notice pill/banner
+        WARN_FG="#b45309",          # Amber-700 readable amber text
+        WARN_BORDER="#fde68a",      # Amber-200 subtle border
+        BAD_FG="#ef4444",           # Rose-500 clean modern danger
+        BAD_BG="#fef2f2",           # Rose-50
+        GOOD_FG="#10b981",          # Emerald-500 crisp security green
+        GOOD_BG="#ecfdf5",          # Emerald-50
+        FIELD="#ffffff",            # Pure white input background
+        FIELD_RO="#f8fafc",         # Soft slate-50 readonly/input container (replaces dirty grey)
+        HEAD_BG="#f8fafc",          # Slate-50 table header
+        HOVER="#f1f5f9",            # Slate-100 interactive hover
+        PRESSED="#e2e8f0",          # Slate-200 interactive pressed
+        TROUGH="#e2e8f0",           # Slate-200 progress bar trough
+        ACCENT="#3b82f6",           # Blue-500
+    ),
+    "dark": dict(
+        BG="#0f172a",               # Slate-900 deep midnight
+        CARD="#1e293b",             # Slate-800 elevated dark card
+        LINE="#334155",             # Slate-700 subtle border
+        LINE_SUBTLE="#1e293b",      # Slate-800
+        TEXT="#f8fafc",             # Slate-50 bright crisp white text
+        MUTED="#94a3b8",            # Slate-400 clean secondary text
+        PRIMARY="#3b82f6",          # Blue-500 vibrant blue
+        PRIMARY_DARK="#2563eb",     # Blue-600 pressed
+        PRIMARY_OFF="#1d4ed8",      # Blue-800 disabled
+        PRIMARY_LIGHT="#1e3a8a",    # Dark blue selection
+        WARN_BG="#451a03",          # Amber-950
+        WARN_FG="#fde68a",          # Amber-200
+        WARN_BORDER="#78350f",      # Amber-900
+        BAD_FG="#f87171",           # Red-400
+        BAD_BG="#450a0a",           # Red-950
+        GOOD_FG="#34d399",          # Emerald-400
+        GOOD_BG="#064e3b",          # Emerald-950
+        FIELD="#0f172a",            # Deep input field
+        FIELD_RO="#1e293b",         # Elevated card readonly
+        HEAD_BG="#1e293b",          # Matching dark table header
+        HOVER="#334155",            # Slate-700 hover
+        PRESSED="#475569",          # Slate-600 pressed
+        TROUGH="#334155",           # Slate-700
+        ACCENT="#60a5fa",           # Blue-400
+    ),
 }
 THEME_NAMES = {"light": "Light", "dark": "Dark"}
 THEME = "light"
-BG = CARD = LINE = TEXT = MUTED = PRIMARY = PRIMARY_DARK = PRIMARY_OFF = ""
-WARN_BG = WARN_FG = BAD_FG = GOOD_FG = FIELD = FIELD_RO = HEAD_BG = HOVER = PRESSED = TROUGH = ""
+BG = CARD = LINE = LINE_SUBTLE = TEXT = MUTED = PRIMARY = PRIMARY_DARK = PRIMARY_OFF = PRIMARY_LIGHT = ""
+WARN_BG = WARN_FG = WARN_BORDER = BAD_FG = BAD_BG = GOOD_FG = GOOD_BG = ""
+FIELD = FIELD_RO = HEAD_BG = HOVER = PRESSED = TROUGH = ACCENT = ""
 
 
 def apply_theme(name: str) -> None:
@@ -146,52 +200,522 @@ def setup_styles(root: tk.Tk) -> None:
     for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont", "TkCaptionFont"):
         f = tkfont.nametofont(name)
         _BASE_FONT_SIZES.setdefault(name, f.cget("size"))
-        f.configure(size=int(round(_BASE_FONT_SIZES[name] * SCALE)))
+        f.configure(size=int(round(_BASE_FONT_SIZES[name] * SCALE)), family=FONT)
     s.theme_use("clam")
     root.configure(bg=BG)
+
+    # Base styling
     s.configure(".", background=BG, foreground=TEXT, font=(FONT, fs(10)), fieldbackground=FIELD)
-    s.map("TButton", background=[("disabled", BG), ("pressed", PRESSED), ("active", HOVER)])
-    s.map("TMenubutton", background=[("disabled", BG), ("pressed", PRESSED), ("active", HOVER)])
-    s.configure("TEntry", insertcolor=TEXT)
-    s.configure("TCombobox", insertcolor=TEXT, arrowcolor=TEXT)
-    s.map("TCombobox", fieldbackground=[("readonly", "focus", "#4a6984"), ("readonly", FIELD_RO)],
-          foreground=[("readonly", "focus", "#ffffff")], background=[("active", HOVER)])
+
+    # Standard clean button
+    s.configure("TButton", relief="flat", borderwidth=1, bordercolor=LINE, lightcolor=LINE, darkcolor=LINE,
+                background=CARD, foreground=TEXT, font=(FONT, fs(10)), padding=(px(12), px(6)))
+    s.map("TButton",
+          background=[("disabled", FIELD_RO), ("pressed", PRESSED), ("active", HOVER)],
+          bordercolor=[("disabled", LINE), ("active", PRIMARY)],
+          foreground=[("disabled", MUTED)])
+
+    # Primary accent button (vibrant modern blue)
+    s.configure("Primary.TButton", relief="flat", borderwidth=0, bordercolor=PRIMARY, lightcolor=PRIMARY, darkcolor=PRIMARY,
+                background=PRIMARY, foreground="#ffffff", padding=(px(14), px(7)),
+                font=(FONT, fs(10), "bold"))
+    s.map("Primary.TButton",
+          background=[("disabled", PRIMARY_OFF), ("pressed", PRIMARY_DARK), ("active", PRIMARY_DARK)],
+          foreground=[("disabled", "#ffffff")])
+
+    # Small action button (for Copy, Open, etc.)
+    s.configure("Small.TButton", relief="flat", borderwidth=1, bordercolor=LINE, lightcolor=LINE, darkcolor=LINE,
+                background=CARD, foreground=TEXT, font=(FONT, fs(9)), padding=(px(8), px(3)))
+    s.map("Small.TButton",
+          background=[("disabled", FIELD_RO), ("pressed", PRESSED), ("active", HOVER)],
+          bordercolor=[("active", PRIMARY)])
+
+    # Danger button
+    s.configure("Danger.TButton", relief="flat", borderwidth=1, bordercolor=BAD_FG, lightcolor=BAD_FG, darkcolor=BAD_FG,
+                background=CARD, foreground=BAD_FG, font=(FONT, fs(10)), padding=(px(12), px(6)))
+    s.map("Danger.TButton",
+          background=[("active", BAD_BG), ("pressed", BAD_BG)],
+          bordercolor=[("active", BAD_FG)])
+
+    # Link button
+    s.configure("Link.TButton", foreground=PRIMARY, background=CARD, borderwidth=0, padding=0,
+                font=(FONT, fs(10)))
+    s.map("Link.TButton", background=[("active", CARD)], foreground=[("active", PRIMARY_DARK)])
+
+    # Menu button (for "⋯")
+    s.configure("More.TMenubutton", font=(FONT, fs(12), "bold"), padding=(px(8), px(2)),
+                relief="flat", borderwidth=1, bordercolor=LINE, lightcolor=LINE, darkcolor=LINE,
+                background=CARD, foreground=MUTED)
+    s.map("More.TMenubutton",
+          background=[("active", HOVER), ("pressed", PRESSED)],
+          bordercolor=[("active", PRIMARY)],
+          foreground=[("active", TEXT)])
+
+    # Entry fields
+    s.configure("TEntry", relief="flat", borderwidth=1, bordercolor=LINE, lightcolor=LINE, darkcolor=LINE,
+                padding=(px(8), px(6)), fieldbackground=FIELD, insertcolor=PRIMARY)
+    s.map("TEntry",
+          bordercolor=[("focus", PRIMARY)],
+          lightcolor=[("focus", PRIMARY)],
+          darkcolor=[("focus", PRIMARY)])
+
+    # Borderless search entry
+    s.configure("Search.TEntry", relief="flat", borderwidth=0, bordercolor=FIELD, lightcolor=FIELD, darkcolor=FIELD,
+                padding=(px(4), px(4)), fieldbackground=FIELD, insertcolor=PRIMARY)
+
+    # Combobox
+    s.configure("TCombobox", relief="flat", borderwidth=1, bordercolor=LINE, lightcolor=LINE, darkcolor=LINE,
+                padding=(px(6), px(5)), arrowsize=px(12), arrowcolor=MUTED, insertcolor=PRIMARY)
+    s.map("TCombobox",
+          bordercolor=[("focus", PRIMARY)],
+          lightcolor=[("focus", PRIMARY)],
+          darkcolor=[("focus", PRIMARY)],
+          fieldbackground=[("readonly", "focus", PRIMARY_LIGHT), ("readonly", FIELD_RO)],
+          foreground=[("readonly", "focus", PRIMARY)],
+          background=[("active", HOVER)])
     root.option_add("*TCombobox*Listbox.background", FIELD)
     root.option_add("*TCombobox*Listbox.foreground", TEXT)
     root.option_add("*TCombobox*Listbox.font", (FONT, fs(10)))
+    root.option_add("*TCombobox*Listbox.selectBackground", PRIMARY)
+    root.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
+
+    # Frames and Labels
     s.configure("Card.TFrame", background=CARD)
-    s.configure("Card.TLabel", background=CARD)
-    s.configure("Muted.TLabel", foreground=MUTED)
+    s.configure("Card.TLabel", background=CARD, foreground=TEXT)
+    s.configure("Muted.TLabel", foreground=MUTED, background=BG)
     s.configure("CardMuted.TLabel", background=CARD, foreground=MUTED)
-    s.configure("Title.TLabel", font=(FONT, fs(20), "bold"))
-    s.configure("H2.TLabel", font=(FONT, fs(13), "bold"), background=CARD)
-    s.configure("Big.TLabel", font=(FONT, fs(16), "bold"), background=CARD)
-    s.configure("Mono.TLabel", font=("Consolas", fs(15)), background=CARD)
-    s.configure("TButton", padding=(10, 5))
-    s.configure("Primary.TButton", background=PRIMARY, foreground="white", padding=(12, 6),
-                font=(FONT, fs(10), "bold"), bordercolor=PRIMARY)
-    s.map("Primary.TButton", background=[("active", PRIMARY_DARK), ("disabled", PRIMARY_OFF)])
-    s.configure("Danger.TButton", foreground=BAD_FG)
-    s.configure("Link.TButton", foreground=PRIMARY, background=CARD, borderwidth=0, padding=0,
-                font=(FONT, fs(10), "underline"))
-    s.map("Link.TButton", background=[("active", CARD)])
-    s.configure("More.TMenubutton", font=(FONT, fs(14), "bold"), padding=(6, 0))
+    s.configure("Title.TLabel", font=(FONT, fs(20), "bold"), background=BG, foreground=TEXT)
+    s.configure("H2.TLabel", font=(FONT, fs(12), "bold"), background=CARD, foreground=TEXT)
+    s.configure("Big.TLabel", font=(FONT, fs(15), "bold"), background=CARD, foreground=TEXT)
+    s.configure("Mono.TLabel", font=("Consolas", fs(13)), background=CARD, foreground=TEXT)
+
+    # Header and Warning
     s.configure("Header.TFrame", background=CARD)
     s.configure("Warn.TFrame", background=WARN_BG)
     s.configure("Warn.TLabel", background=WARN_BG, foreground=WARN_FG, font=(FONT, fs(10), "bold"))
-    s.configure("TCheckbutton", background=CARD)
-    s.configure("TRadiobutton", background=CARD)
-    s.configure("Treeview", rowheight=px(30), font=(FONT, fs(10)), background=CARD, fieldbackground=CARD,
-                foreground=TEXT)
-    s.configure("Treeview.Heading", font=(FONT, fs(10), "bold"), background=HEAD_BG, foreground=TEXT)
-    s.map("Treeview.Heading", background=[("active", HOVER)])
+    s.configure("WarnMuted.TLabel", background=WARN_BG, foreground=WARN_FG, font=(FONT, fs(9)))
+
+    # Checks and Radios
+    s.configure("TCheckbutton", background=CARD, foreground=TEXT, font=(FONT, fs(10)))
+    s.configure("TRadiobutton", background=CARD, foreground=TEXT, font=(FONT, fs(10)))
+
+    # Treeview (Modern list layout)
+    s.configure("Treeview", rowheight=px(42), font=(FONT, fs(10)),
+                background=CARD, fieldbackground=CARD, foreground=TEXT,
+                relief="flat", borderwidth=0, bordercolor=LINE, lightcolor=LINE, darkcolor=LINE)
+    s.map("Treeview",
+          background=[("selected", PRIMARY_LIGHT)],
+          foreground=[("selected", PRIMARY)])
+
+    s.configure("Treeview.Heading", relief="flat", borderwidth=0,
+                bordercolor=LINE, lightcolor=LINE, darkcolor=LINE,
+                background=HEAD_BG, foreground=TEXT, font=(FONT, fs(9), "bold"),
+                padding=(px(12), px(10)))
+    s.map("Treeview.Heading",
+          background=[("active", HOVER)],
+          relief=[("active", "flat"), ("pressed", "flat")])
+
+    # Scales and Progressbars
     s.configure("Horizontal.TScale", background=CARD)
-    s.configure("Horizontal.TProgressbar", troughcolor=TROUGH)
-    s.configure("Vertical.TScrollbar", background=HEAD_BG, troughcolor=BG, arrowcolor=TEXT, bordercolor=LINE)
-    s.map("Vertical.TScrollbar", background=[("active", HOVER)])
+    s.configure("Horizontal.TProgressbar", relief="flat", borderwidth=0, troughcolor=TROUGH,
+                bordercolor=TROUGH, lightcolor=TROUGH, darkcolor=TROUGH)
+    s.configure("Vertical.TScrollbar", relief="flat", borderwidth=0,
+                troughcolor=BG, background=LINE, arrowcolor=MUTED, bordercolor=BG, lightcolor=BG, darkcolor=BG)
+    s.map("Vertical.TScrollbar", background=[("active", MUTED)])
     for i, c in enumerate(METER):
         s.configure(f"M{i}.Horizontal.TProgressbar", background=c, troughcolor=TROUGH,
                     bordercolor=TROUGH, lightcolor=c, darkcolor=c)
+
+
+# ---------------------------------------------------------------- modern curved UI helpers
+def _get_parent_bg(parent, fallback=None):
+    """Safely get the background color of a parent widget, handling ttk widgets."""
+    try:
+        return parent.cget("bg")
+    except Exception:
+        try:
+            return parent.cget("background")
+        except Exception:
+            return fallback or BG
+
+_img_cache = {}
+_emoji_img_cache = {}
+
+def get_emoji_icon(emoji: str, size=16):
+    """Render crisp, consistent Segoe UI Emoji icons across Windows Tkinter."""
+    key = (emoji, size)
+    if key in _emoji_img_cache:
+        return _emoji_img_cache[key]
+    scale = 3
+    ssize = size * scale
+    img = Image.new("RGBA", (ssize, ssize), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.truetype("seguiemj.ttf", int(size * scale * 0.92))
+        draw.text((0, 0), emoji, font=font, embedded_color=True)
+    except Exception:
+        try:
+            font = ImageFont.truetype("segoeui.ttf", int(size * scale * 0.85))
+            draw.text((0, 0), emoji, font=font, fill="#475569")
+        except Exception:
+            font = ImageFont.load_default()
+            draw.text((0, 0), emoji, font=font, fill="#475569")
+    res = ImageTk.PhotoImage(img.resize((size, size), Image.Resampling.LANCZOS))
+    _emoji_img_cache[key] = res
+    return res
+
+def get_rounded_rect_img(w, h, r, fill, outline=None, width=1):
+    w, h = max(1, int(w)), max(1, int(h))
+    r = max(1, min(int(r), w // 2, h // 2))
+    key = (w, h, r, fill, outline, width)
+    if key in _img_cache:
+        return _img_cache[key]
+    scale = 3
+    sw, sh = w * scale, h * scale
+    sr = max(1, r * scale)
+    sow = width * scale if outline else 0
+    img = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle([0, 0, sw - 1, sh - 1], radius=sr, fill=fill, outline=outline, width=sow)
+    res = ImageTk.PhotoImage(img.resize((w, h), Image.Resampling.LANCZOS))
+    _img_cache[key] = res
+    return res
+
+
+_avatar_cache = {}
+
+def get_service_avatar(name="", size=32, radius=8):
+    name = (name or "?").strip()
+    letter = name[0].upper()
+    # Clean neutral monochrome palette (black / dark charcoal text on crisp slate background)
+    bg_color = "#f1f5f9" if THEME == "light" else "#334155"
+    fg_color = "#0f172a" if THEME == "light" else "#f8fafc"
+    border_color = "#cbd5e1" if THEME == "light" else "#475569"
+    key = (letter, bg_color, fg_color, border_color, size, radius)
+    if key in _avatar_cache:
+        return _avatar_cache[key]
+    scale = 3
+    ssize = size * scale
+    sradius = radius * scale
+    img = Image.new("RGBA", (ssize, ssize), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle([0, 0, ssize - 1, ssize - 1], radius=sradius, fill=bg_color, outline=border_color, width=max(1, int(1 * scale)))
+    try:
+        font = ImageFont.truetype("segoeuib.ttf", int(13 * scale))
+    except Exception:
+        font = ImageFont.load_default()
+    bbox = draw.textbbox((0, 0), letter, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    draw.text(((ssize - tw) // 2, (ssize - th) // 2 - int(2 * scale)), letter, fill=fg_color, font=font)
+    res = ImageTk.PhotoImage(img.resize((size, size), Image.Resampling.LANCZOS))
+    _avatar_cache[key] = res
+    return res
+
+
+class RoundedCard(tk.Canvas):
+    """A smooth anti-aliased container card with curved corners and clean border."""
+
+    def __init__(self, parent, bg_color=None, border_color=None, radius=14, border_width=1, auto_height=False, **kw):
+        c_bg = _get_parent_bg(parent, BG)
+        super().__init__(parent, highlightthickness=0, bg=c_bg, **kw)
+        self.card_bg = bg_color or CARD
+        self.border_color = border_color or LINE
+        self.radius = radius
+        self.border_width = border_width
+        self.auto_height = auto_height
+        self.inner = tk.Frame(self, bg=self.card_bg)
+        self._win_id = self.create_window(0, 0, window=self.inner, anchor="nw")
+        self.bind("<Configure>", self._on_resize)
+        if self.auto_height:
+            self.inner.bind("<Configure>", self._on_inner_config)
+
+    def _on_inner_config(self, event=None):
+        req_h = self.inner.winfo_reqheight()
+        pad = max(6, self.radius // 2)
+        target_h = req_h + pad * 2
+        if abs(self.winfo_height() - target_h) > 2:
+            self.config(height=target_h)
+
+    def _on_resize(self, event):
+        w, h = event.width, event.height
+        if w < 5 or h < 5:
+            return
+        img = get_rounded_rect_img(w, h, self.radius, self.card_bg, self.border_color, self.border_width)
+        self.delete("bg_rect")
+        self.create_image(0, 0, image=img, anchor="nw", tags="bg_rect")
+        self.tag_lower("bg_rect")
+        pad = max(6, self.radius // 2)
+        self.coords(self._win_id, pad, pad)
+        if self.auto_height:
+            self.itemconfigure(self._win_id, width=max(1, w - pad * 2))
+        else:
+            self.itemconfigure(self._win_id, width=max(1, w - pad * 2), height=max(1, h - pad * 2))
+
+
+class PillButton(tk.Canvas):
+    """Clickable curved capsule button for category filters and quick actions."""
+
+    def __init__(self, parent, text, command=None, is_active=False,
+                 active_bg=None, active_fg="#ffffff",
+                 inactive_bg=None, inactive_fg=None, border_color=None,
+                 font=None, padx=12, pady=5, **kw):
+        c_bg = _get_parent_bg(parent, CARD)
+        super().__init__(parent, highlightthickness=0, bg=c_bg, **kw)
+        self.text = text
+        self.command = command
+        self.is_active = is_active
+        self.is_hovered = False
+        self.active_bg = active_bg or "#0f172a"
+        self.active_fg = active_fg
+        self.inactive_bg = inactive_bg or FIELD_RO
+        self.inactive_fg = inactive_fg or TEXT
+        self.border_color = border_color or LINE
+        self.font = font or (FONT, fs(9), "bold")
+        self.padx = padx
+        self.pady = pady
+        self.bind("<Button-1>", self._on_click)
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self.render()
+
+    def _on_enter(self, e):
+        self.config(cursor="hand2")
+        if not self.is_active:
+            self.is_hovered = True
+            self.render()
+
+    def _on_leave(self, e):
+        if not self.is_active:
+            self.is_hovered = False
+            self.render()
+
+    def set_active(self, active):
+        if self.is_active != active:
+            self.is_active = active
+            self.is_hovered = False
+            self.render()
+
+    def render(self):
+        self.delete("all")
+        t_id = self.create_text(0, 0, text=self.text, font=self.font, anchor="nw")
+        bbox = self.bbox(t_id)
+        self.delete(t_id)
+        tw = (bbox[2] - bbox[0]) if bbox else 30
+        th = (bbox[3] - bbox[1]) if bbox else 14
+        w = max(36, tw + self.padx * 2)
+        h = max(24, th + self.pady * 2)
+        self.config(width=w, height=h)
+
+        if self.is_active:
+            fill = self.active_bg
+            fg = self.active_fg
+            outline = None
+        elif self.is_hovered:
+            fill = HOVER
+            fg = self.inactive_fg
+            outline = self.border_color
+        else:
+            fill = self.inactive_bg
+            fg = self.inactive_fg
+            outline = self.border_color
+
+        img = get_rounded_rect_img(w, h, h // 2, fill, outline, 1)
+        self.create_image(0, 0, image=img, anchor="nw")
+        self.create_text(w // 2, h // 2, text=self.text, font=self.font, fill=fg, anchor="center")
+
+    def _on_click(self, e):
+        if self.command:
+            self.command()
+
+
+CAT_ICONS = {
+    "All items": "🗂️",
+    "Needs attention": "⚠️",
+    "Email": "✉️",
+    "Social": "💬",
+    "Banking": "🏦",
+    "Shopping": "🛍️",
+    "Work": "💼",
+    "Entertainment": "🎬",
+    "Other": "📦",
+}
+
+
+class CurvedNavRow(tk.Canvas):
+    """An individual curved pill row in the sidebar navigation."""
+
+    def __init__(self, parent, icon="", name="", count="", is_active=False,
+                 active_bg=None, active_fg="#ffffff", hover_bg=None,
+                 text_fg=None, font=None, on_click=None):
+        h = px(32)
+        c_bg = _get_parent_bg(parent, CARD)
+        super().__init__(parent, height=h, highlightthickness=0, bg=c_bg)
+        self.icon = icon
+        self.name = name
+        self.count = count
+        self.is_active = is_active
+        self.is_hovered = False
+        self.active_bg = active_bg or "#0f172a"
+        self.active_fg = active_fg
+        self.hover_bg = hover_bg or HOVER
+        self.text_fg = text_fg or TEXT
+        self.custom_fg = None
+        self.font = font or (FONT, fs(10))
+        self.on_click = on_click
+        self._icon_img = None
+        self.bind("<Configure>", self._render)
+        self.bind("<Button-1>", lambda e: self.on_click() if self.on_click else None)
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+
+    def _on_enter(self, e):
+        self.config(cursor="hand2")
+        if not self.is_active:
+            self.is_hovered = True
+            self._render()
+
+    def _on_leave(self, e):
+        if not self.is_active:
+            self.is_hovered = False
+            self._render()
+
+    def set_active(self, active):
+        if self.is_active != active:
+            self.is_active = active
+            self.is_hovered = False
+            self._render()
+
+    def _render(self, event=None):
+        w = self.winfo_width()
+        h = self.winfo_height()
+        if w < 10 or h < 10:
+            return
+        self.delete("all")
+        r = min(px(14), h // 2)
+
+        if self.is_active:
+            bg_img = get_rounded_rect_img(w, h, r, self.active_bg)
+            self.create_image(0, 0, image=bg_img, anchor="nw")
+            fg = self.active_fg
+            font = (FONT, fs(10), "bold")
+            count_bg = "#334155" if THEME == "light" else "#475569"
+            count_fg = "#ffffff"
+        elif self.is_hovered:
+            bg_img = get_rounded_rect_img(w, h, r, self.hover_bg)
+            self.create_image(0, 0, image=bg_img, anchor="nw")
+            fg = self.custom_fg or self.text_fg
+            font = (FONT, fs(10))
+            count_bg = LINE
+            count_fg = TEXT
+        else:
+            fg = self.custom_fg or self.text_fg
+            font = (FONT, fs(10))
+            count_bg = FIELD_RO
+            count_fg = MUTED
+
+        # Render emoji icon as a high-DPI Pillow image so it never displays as black/white wireframe
+        text_x = px(12)
+        if self.icon:
+            self._icon_img = get_emoji_icon(self.icon, size=px(16))
+            self.create_image(px(12), h // 2, image=self._icon_img, anchor="w")
+            text_x = px(36)
+
+        self.create_text(text_x, h // 2, text=self.name, font=font, fill=fg, anchor="w")
+
+        if self.count:
+            cw, ch = px(24), px(18)
+            cx, cy = w - cw - px(10), (h - ch) // 2
+            count_img = get_rounded_rect_img(cw, ch, ch // 2, count_bg)
+            self.create_image(cx, cy, image=count_img, anchor="nw")
+            self.create_text(cx + cw // 2, cy + ch // 2, text=self.count,
+                             font=(FONT, fs(8), "bold"), fill=count_fg, anchor="center")
+
+
+class CurvedNavList(tk.Frame):
+    """Curved sidebar navigation list with tk.Listbox drop-in API compatibility."""
+
+    def __init__(self, parent, bg=None, active_bg=None, active_fg="#ffffff",
+                 hover_bg=None, text_fg=None, font=None, **kw):
+        c_bg = bg or CARD
+        super().__init__(parent, bg=c_bg, **kw)
+        self.rows = []
+        self.selected_idx = None
+        self.active_bg = active_bg or "#0f172a"
+        self.active_fg = active_fg
+        self.hover_bg = hover_bg or HOVER
+        self.text_fg = text_fg or TEXT
+        self.font = font or (FONT, fs(10))
+        self._callbacks = []
+
+    def bind(self, sequence, func, add=None):
+        if sequence == "<<ListboxSelect>>":
+            self._callbacks.append(func)
+        else:
+            super().bind(sequence, func, add=add)
+
+    def curselection(self):
+        return (self.selected_idx,) if self.selected_idx is not None else ()
+
+    def selection_set(self, idx):
+        if 0 <= idx < len(self.rows):
+            self.selected_idx = idx
+            self._update_visuals()
+
+    def delete(self, start, end=None):
+        self.rows.clear()
+        self.selected_idx = None
+        for w in self.winfo_children():
+            w.destroy()
+
+    def insert(self, pos, text):
+        idx = len(self.rows)
+        clean_text = text.strip()
+        icon = ""
+        count_str = ""
+        name = clean_text
+        if "(" in clean_text and clean_text.endswith(")"):
+            name_part, count_part = clean_text.rsplit("(", 1)
+            name = name_part.strip()
+            count_str = count_part.rstrip(")").strip()
+            if name.startswith("⚠") or "Needs attention" in name:
+                name = "Needs attention"
+                icon = "⚠️"
+        if not icon:
+            icon = CAT_ICONS.get(name, "📦")
+
+        row = CurvedNavRow(
+            self,
+            icon=icon,
+            name=name,
+            count=count_str,
+            is_active=(idx == self.selected_idx),
+            active_bg=self.active_bg,
+            active_fg=self.active_fg,
+            hover_bg=self.hover_bg,
+            text_fg=self.text_fg,
+            font=self.font,
+            on_click=lambda i=idx: self._select_row(i),
+        )
+        row.pack(fill="x", pady=px(2))
+        self.rows.append(row)
+
+    def itemconfigure(self, idx, **kw):
+        if idx == "end":
+            idx = len(self.rows) - 1
+        if 0 <= idx < len(self.rows):
+            if "foreground" in kw:
+                self.rows[idx].custom_fg = kw["foreground"]
+                self.rows[idx]._render()
+
+    def _select_row(self, idx):
+        self.selected_idx = idx
+        self._update_visuals()
+        for cb in self._callbacks:
+            cb(None)
+
+    def _update_visuals(self):
+        for i, row in enumerate(self.rows):
+            row.set_active(i == self.selected_idx)
 
 
 class Dialog(tk.Toplevel):
@@ -325,11 +849,11 @@ def show_recovery_key(parent, key: str) -> None:
               text="If you ever forget your master password, this key is the only way to get "
                    "back into SafeSpace. Nobody, including the SafeSpace team, can reset it for you.\n\n"
                    "Write it down or save it somewhere safe that isn't this computer.").pack(anchor="w", pady=(6, 12))
-    box = ttk.Frame(b, style="Card.TFrame", padding=12, relief="solid", borderwidth=1)
+    box = tk.Frame(b, bg=FIELD_RO, highlightbackground=LINE, highlightthickness=1, padx=px(16), pady=px(12))
     box.pack(fill="x")
-    ttk.Label(box, text=key, style="Mono.TLabel").pack()
+    ttk.Label(box, text=key, style="Mono.TLabel", background=FIELD_RO).pack()
     row = ttk.Frame(b, style="Card.TFrame")
-    row.pack(fill="x", pady=10)
+    row.pack(fill="x", pady=12)
 
     def copy():
         d.clipboard_clear()
@@ -348,8 +872,8 @@ def show_recovery_key(parent, key: str) -> None:
     ok = tk.BooleanVar()
     cont = ttk.Button(b, text="Continue", style="Primary.TButton", state="disabled", command=d.destroy)
     ttk.Checkbutton(b, text="I have stored my recovery key somewhere safe", variable=ok,
-                    command=lambda: cont.configure(state="normal" if ok.get() else "disabled")).pack(anchor="w")
-    cont.pack(anchor="e", pady=(12, 0))
+                    command=lambda: cont.configure(state="normal" if ok.get() else "disabled")).pack(anchor="w", pady=(10, 0))
+    cont.pack(anchor="e", pady=(14, 0))
     d.show()
 
 
@@ -366,9 +890,9 @@ class PassGenDialog(Dialog):
                   style="CardMuted.TLabel").grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 12))
 
         self.result = tk.StringVar()
-        out = ttk.Frame(b, style="Card.TFrame", padding=10, relief="solid", borderwidth=1)
+        out = tk.Frame(b, bg=FIELD_RO, highlightbackground=LINE, highlightthickness=1, padx=px(12), pady=px(10))
         out.grid(row=2, column=0, columnspan=3, sticky="we")
-        ttk.Label(out, textvariable=self.result, style="Mono.TLabel", width=34).pack(side="left")
+        ttk.Label(out, textvariable=self.result, style="Mono.TLabel", background=FIELD_RO, width=34).pack(side="left")
         ttk.Button(out, text="↻ New", command=self.generate).pack(side="right")
         self.meter = StrengthMeter(b, self.result)
         self.meter.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 12))
@@ -482,8 +1006,9 @@ class EntryDialog(Dialog):
                                               state="readonly", width=20))
         ttk.Label(b, text="Notes", style="Card.TLabel", font=(FONT, fs(10), "bold")).grid(
             row=9, column=0, sticky="nw", pady=(6, 0))
-        self.notes = tk.Text(b, width=40, height=3, font=(FONT, fs(10)), relief="solid", borderwidth=1,
-                             bg=FIELD, fg=TEXT, insertbackground=TEXT)
+        self.notes = tk.Text(b, width=40, height=3, font=(FONT, fs(10)), relief="flat",
+                             highlightbackground=LINE, highlightthickness=1,
+                             padx=px(8), pady=px(6), bg=FIELD, fg=TEXT, insertbackground=PRIMARY)
         self.notes.insert("1.0", secret.get("notes", ""))
         self.notes.grid(row=9, column=1, sticky="we", pady=(6, 0))
 
@@ -1026,8 +1551,8 @@ class AccountDialog(Dialog):
         ttk.Label(b, text="Account & security", style="Big.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
 
         def section(r, title, text):
-            ttk.Separator(b).grid(row=r, column=0, columnspan=2, sticky="we", pady=12)
-            ttk.Label(b, text=title, style="H2.TLabel").grid(row=r + 1, column=0, columnspan=2, sticky="w")
+            tk.Frame(b, bg=LINE, height=1).grid(row=r, column=0, columnspan=2, sticky="we", pady=px(14))
+            ttk.Label(b, text=title, font=(FONT, fs(12), "bold"), style="Card.TLabel").grid(row=r + 1, column=0, columnspan=2, sticky="w")
             if text:
                 ttk.Label(b, text=text, style="CardMuted.TLabel", wraplength=px(480), justify="left").grid(
                     row=r + 2, column=0, columnspan=2, sticky="w", pady=(2, 6))
@@ -1230,27 +1755,36 @@ class SetupScreen(ttk.Frame):
     def __init__(self, app):
         super().__init__(app)
         self.app = app
-        card = ttk.Frame(self, style="Card.TFrame", padding=32)
+        card = tk.Frame(self, bg=CARD, highlightbackground=LINE, highlightthickness=1, padx=px(36), pady=px(32))
         card.place(relx=0.5, rely=0.45, anchor="center")
-        ttk.Label(card, text="Welcome to SafeSpace", style="Big.TLabel", font=(FONT, fs(20), "bold")).pack(anchor="w")
-        ttk.Label(card, style="Card.TLabel", wraplength=px(420), justify="left",
+
+        logo_row = tk.Frame(card, bg=CARD)
+        logo_row.pack(anchor="w", pady=(0, px(4)))
+        tk.Label(logo_row, text="🔒", font=(FONT, fs(20)), bg=CARD).pack(side="left", padx=(0, px(8)))
+        tk.Label(logo_row, text="Welcome to SafeSpace", font=(FONT, fs(18), "bold"), bg=CARD, fg=TEXT).pack(side="left")
+
+        ttk.Label(card, style="CardMuted.TLabel", wraplength=px(420), justify="left",
                   text="SafeSpace remembers your passwords in an encrypted vault on this computer. "
-                       "You only need to remember one password: your master password.").pack(anchor="w", pady=(6, 8))
-        box = ttk.Frame(card, style="Card.TFrame", padding=(12, 8), relief="solid", borderwidth=1)
-        box.pack(fill="x", pady=(0, 10))
-        ttk.Label(box, text="\U0001F512  How your passwords are protected", style="Card.TLabel",
-                  font=(FONT, fs(10), "bold")).pack(anchor="w")
+                       "You only need to remember one password: your master password.").pack(anchor="w", pady=(px(4), px(12)))
+
+        box = tk.Frame(card, bg=FIELD_RO, highlightbackground=LINE, highlightthickness=1, padx=px(14), pady=px(10))
+        box.pack(fill="x", pady=(0, px(12)))
+        tk.Label(box, text="🛡️  How your passwords are protected", font=(FONT, fs(10), "bold"), bg=FIELD_RO, fg=TEXT).pack(anchor="w", pady=(0, px(4)))
         for line in PROTECTION_POINTS:
-            ttk.Label(box, text="•  " + line, style="CardMuted.TLabel", wraplength=px(400),
-                      justify="left").pack(anchor="w", pady=(2, 0))
-        ttk.Label(card, text="⚠ " + NOTICE, style="Card.TLabel", foreground=WARN_FG, wraplength=px(420),
-                  justify="left").pack(anchor="w", pady=(0, 14))
+            tk.Label(box, text="•  " + line, font=(FONT, fs(9)), bg=FIELD_RO, fg=MUTED, wraplength=px(400),
+                     justify="left").pack(anchor="w", pady=(px(2), 0))
+
+        warn_pill = tk.Frame(card, bg=WARN_BG, highlightbackground=WARN_BORDER, highlightthickness=1, padx=px(10), pady=px(6))
+        warn_pill.pack(fill="x", pady=(0, px(14)))
+        tk.Label(warn_pill, text="⚠ " + NOTICE, font=(FONT, fs(9)), bg=WARN_BG, fg=WARN_FG, wraplength=px(400),
+                 justify="left").pack(anchor="w")
+
         self.form = NewMasterForm(card)
         self.form.pack(anchor="w")
         ttk.Label(card, style="CardMuted.TLabel", wraplength=px(420),
-                  text="Next you'll get a recovery key in case you ever forget it.").pack(anchor="w", pady=(12, 0))
+                  text="Next you'll get a recovery key in case you ever forget it.").pack(anchor="w", pady=(px(12), 0))
         ttk.Button(card, text="Create my vault", style="Primary.TButton", command=self.create).pack(anchor="e",
-                                                                                                    pady=(16, 0))
+                                                                                                    pady=(px(16), 0))
         app.bind("<Return>", lambda e: self.create())
         self.form.focus()
 
@@ -1270,33 +1804,44 @@ class UnlockScreen(ttk.Frame):
     def __init__(self, app, message=""):
         super().__init__(app)
         self.app = app
-        card = ttk.Frame(self, style="Card.TFrame", padding=32)
+        card = tk.Frame(self, bg=CARD, highlightbackground=LINE, highlightthickness=1, padx=px(36), pady=px(32))
         card.place(relx=0.5, rely=0.42, anchor="center")
-        ttk.Label(card, text="\U0001F512  SafeSpace", style="Big.TLabel", font=(FONT, fs(22), "bold")).pack(anchor="w")
-        ttk.Label(card, text="Unlock your vault to view passwords.", style="Card.TLabel").pack(anchor="w",
-                                                                                               pady=(4, 14))
+
+        logo_row = tk.Frame(card, bg=CARD)
+        logo_row.pack(anchor="w", pady=(0, px(2)))
+        tk.Label(logo_row, text="🔒", font=(FONT, fs(22)), bg=CARD).pack(side="left", padx=(0, px(8)))
+        tk.Label(logo_row, text="SafeSpace", font=(FONT, fs(20), "bold"), bg=CARD, fg=TEXT).pack(side="left")
+
+        ttk.Label(card, text="Unlock your vault to view passwords.", style="CardMuted.TLabel").pack(anchor="w",
+                                                                                               pady=(px(2), px(16)))
         if message:
-            ttk.Label(card, text=message, style="CardMuted.TLabel").pack(anchor="w", pady=(0, 8))
+            ttk.Label(card, text=message, style="CardMuted.TLabel").pack(anchor="w", pady=(0, px(10)))
 
         self.can_face = Vault.is_biometric_enabled(self.app.vault_path) and face_auth.has_biometric_profile(self.app.vault_path)
         if self.can_face:
             ttk.Button(card, text="👤  Unlock with Face ID", style="Primary.TButton",
-                       command=self.unlock_face).pack(fill="x", pady=(0, 10))
-            ttk.Label(card, text="— or enter master password —", style="CardMuted.TLabel").pack(anchor="center", pady=(0, 10))
+                       command=self.unlock_face).pack(fill="x", pady=(0, px(12)))
+            sep_row = tk.Frame(card, bg=CARD)
+            sep_row.pack(fill="x", pady=(0, px(12)))
+            tk.Frame(sep_row, bg=LINE, height=1).pack(side="left", fill="x", expand=True)
+            tk.Label(sep_row, text="  or enter master password  ", font=(FONT, fs(9)), bg=CARD, fg=MUTED).pack(side="left")
+            tk.Frame(sep_row, bg=LINE, height=1).pack(side="left", fill="x", expand=True)
 
         self.pw = tk.StringVar()
         field = PasswordField(card, self.pw, width=30)
         field.pack(fill="x")
         self.err = ttk.Label(card, text="", style="Card.TLabel", foreground=BAD_FG)
-        self.err.pack(anchor="w", pady=(4, 0))
+        self.err.pack(anchor="w", pady=(px(4), 0))
         btn_style = "TButton" if self.can_face else "Primary.TButton"
         self._unlocking = False
         self.unlock_btn = ttk.Button(card, text="Unlock with Password", style=btn_style, command=self.unlock)
-        self.unlock_btn.pack(fill="x", pady=(8, 0))
+        self.unlock_btn.pack(fill="x", pady=(px(10), 0))
         ttk.Button(card, text="Forgot your master password?", style="Link.TButton",
-                   command=self.recover).pack(anchor="w", pady=(14, 0))
+                   command=self.recover).pack(anchor="w", pady=(px(14), 0))
         if app.demo_hint:
-            ttk.Label(card, text=app.demo_hint, style="CardMuted.TLabel").pack(anchor="w", pady=(14, 0))
+            hint_box = tk.Frame(card, bg=FIELD_RO, highlightbackground=LINE, highlightthickness=1, padx=px(10), pady=px(6))
+            hint_box.pack(fill="x", pady=(px(14), 0))
+            tk.Label(hint_box, text="💡 " + app.demo_hint, font=(FONT, fs(9)), bg=FIELD_RO, fg=MUTED, wraplength=px(320), justify="left").pack(anchor="w")
         app.bind("<Return>", lambda e: self.unlock())
         field.entry.focus_set()
 
@@ -1446,100 +1991,272 @@ class HomeScreen(ttk.Frame):
         self.selected = None
         self.revealed = None           # (lid, secret, pin) for the selected entry only
         self.collapsed = set()         # website groups the user has folded up
+        self._tree_avatars = {}
+        self._detail_avatar = None
 
-        # Header
-        hdr = ttk.Frame(self, style="Header.TFrame", padding=(16, 10))
+        self._banner_dismissed = False
+
+        # Top Header Bar with clean border and action pills
+        self.hdr_wrap = tk.Frame(self, bg=CARD)
+        self.hdr_wrap.pack(fill="x")
+        hdr = tk.Frame(self.hdr_wrap, bg=CARD, padx=px(20), pady=px(10))
         hdr.pack(fill="x")
-        ttk.Label(hdr, text="\U0001F512 SafeSpace", style="Big.TLabel").pack(side="left")
-        self.q = tk.StringVar()
+
+        # Logo with modern mode badge
+        logo_box = tk.Frame(hdr, bg=CARD)
+        logo_box.pack(side="left")
+        tk.Label(logo_box, text="🔒", font=(FONT, fs(14)), bg=CARD).pack(side="left", padx=(0, px(6)))
+        tk.Label(logo_box, text="SafeSpace", font=(FONT, fs(15), "bold"), bg=CARD, fg=TEXT).pack(side="left")
+
+        # Mode Badge (Demo or Active)
+        b_text = "DEMO VAULT" if self.app.demo_hint else "ACTIVE VAULT"
+        b_bg = PRIMARY_LIGHT if self.app.demo_hint else "#f0fdf4"
+        b_fg = PRIMARY if self.app.demo_hint else "#16a34a"
+        b_border = PRIMARY_OFF if self.app.demo_hint else "#bbf7d0"
+        badge = tk.Frame(logo_box, bg=b_bg, highlightbackground=b_border, highlightthickness=1, padx=px(8), pady=px(2))
+        badge.pack(side="left", padx=(px(12), 0))
+        tk.Label(badge, text=b_text, font=(FONT, fs(8), "bold"), bg=b_bg, fg=b_fg).pack()
+
+        # Top Action Buttons
         ttk.Button(hdr, text="⚙ Account", command=lambda: AccountDialog(app).show()).pack(side="right")
-        ttk.Button(hdr, text="Export", command=lambda: ExportDialog(app).show()).pack(side="right", padx=4)
-        ttk.Button(hdr, text="Import", command=lambda: do_import(app)).pack(side="right")
-        ttk.Button(hdr, text="PassGen", command=lambda: PassGenDialog(app, app).show()).pack(side="right", padx=4)
-        ttk.Button(hdr, text="+ Add login", style="Primary.TButton",
-                   command=lambda: EntryDialog(app).show()).pack(side="right", padx=4)
-        # Packed after the buttons so the search box, not a button, gives way on narrow windows.
-        sbox = ttk.Frame(hdr, style="Header.TFrame")
-        sbox.pack(side="left", padx=24, fill="x", expand=True)
-        ttk.Label(sbox, text="\U0001F50D", style="Card.TLabel").pack(side="left")
-        self.search = ttk.Entry(sbox, textvariable=self.q, font=(FONT, fs(11)), width=12)
-        self.search.pack(side="left", fill="x", expand=True, padx=4)
-        self._placeholder()
-        self.sep = ttk.Separator(self)
+        ttk.Button(hdr, text="Export", command=lambda: ExportDialog(app).show()).pack(side="right", padx=(px(4), px(2)))
+        ttk.Button(hdr, text="Import", command=lambda: do_import(app)).pack(side="right", padx=px(2))
+        ttk.Button(hdr, text="PassGen", command=lambda: PassGenDialog(app, app).show()).pack(side="right", padx=(px(4), px(2)))
+        ttk.Button(hdr, text="+ Add New Item", style="Primary.TButton",
+                   command=lambda: EntryDialog(app).show()).pack(side="right", padx=(0, px(4)))
+
+        # 1px border under header
+        self.sep = tk.Frame(self.hdr_wrap, bg=LINE, height=1)
         self.sep.pack(fill="x")
 
-        # Warning banner (packed only when needed)
-        self.banner = ttk.Frame(self, style="Warn.TFrame", padding=(16, 8))
-        self.banner_text = ttk.Label(self.banner, style="Warn.TLabel")
+        # Warning banner (Curved banner, packed only when needed)
+        self.banner = RoundedCard(self, bg_color=WARN_BG, border_color=WARN_BORDER, radius=10, height=px(44))
+        b_in = self.banner.inner
+        b_in.configure(bg=WARN_BG)
+        tk.Label(b_in, text="⚠️", font=(FONT, fs(10)), bg=WARN_BG).pack(side="left", padx=(px(10), px(4)))
+        self.banner_text = tk.Label(b_in, font=(FONT, fs(9), "bold"), bg=WARN_BG, fg=WARN_FG)
         self.banner_text.pack(side="left")
-        ttk.Button(self.banner, text="Review them", command=lambda: self.set_filter(ATTENTION)).pack(side="left",
-                                                                                                    padx=12)
 
-        body = ttk.Frame(self, padding=12)
-        body.pack(fill="both", expand=True)
+        # Right actions: Review them button and close button (✕)
+        close_btn = tk.Label(b_in, text="✕", font=(FONT, fs(10), "bold"), bg=WARN_BG, fg=WARN_FG, cursor="hand2", padx=px(6), pady=px(2))
+        close_btn.pack(side="right", padx=(px(4), px(10)))
+        close_btn.bind("<Button-1>", lambda e: self.dismiss_banner())
+        close_btn.bind("<Enter>", lambda e: close_btn.configure(fg=TEXT))
+        close_btn.bind("<Leave>", lambda e: close_btn.configure(fg=WARN_FG))
+
+        ttk.Button(b_in, text="Review them →", command=lambda: self.set_filter(ATTENTION),
+                   style="Small.TButton").pack(side="right", padx=(0, px(6)))
+
+        # Main Body Frame
+        body = tk.Frame(self, bg=BG)
+        body.pack(fill="both", expand=True, padx=px(16), pady=px(10))
         self.body = body
 
-        # Sidebar
-        side = ttk.Frame(body, style="Card.TFrame", padding=8)
-        side.pack(side="left", fill="y")
-        ttk.Label(side, text="Categories", style="H2.TLabel").pack(anchor="w", padx=4, pady=(0, 6))
-        self.cats = tk.Listbox(side, width=24, activestyle="none", borderwidth=0, highlightthickness=0,
-                               font=(FONT, fs(11)), exportselection=False, selectbackground=PRIMARY, selectforeground="white", bg=CARD,
-                               fg=TEXT)
-        self.cats.pack(fill="y", expand=True)
+        # Left Sidebar (Nav + Tools + Settings)
+        side = tk.Frame(body, bg=BG, width=px(220))
+        side.pack(side="left", fill="y", padx=(0, px(16)))
+        side.pack_propagate(False)
+
+        # 1. VAULT ITEMS
+        tk.Label(side, text="VAULT ITEMS", font=(FONT, fs(10), "bold"), bg=BG, fg="#334155" if THEME == "light" else "#cbd5e1").pack(anchor="w", padx=px(10), pady=(px(4), px(8)))
+        self.cats = CurvedNavList(side, bg=BG, active_bg="#0f172a" if THEME == "light" else "#334155")
+        self.cats.pack(fill="x")
         self.cats.bind("<<ListboxSelect>>", self._on_cat)
 
-        # List
-        mid = ttk.Frame(body, style="Card.TFrame")
-        mid.pack(side="left", fill="both", expand=True, padx=12)
-        self.list_title = ttk.Label(mid, style="H2.TLabel", padding=(10, 8))
-        self.list_title.pack(anchor="w")
-        self.tree = ttk.Treeview(mid, columns=("user", "site", "strength"), selectmode="browse")
-        for col, text, w in [("#0", "Name", 160), ("user", "Username", 170), ("site", "Website", 120),
-                             ("strength", "Password", 105)]:
+        # 2. TOOLS AND SAFETY
+        tk.Label(side, text="TOOLS AND SAFETY", font=(FONT, fs(10), "bold"), bg=BG, fg="#334155" if THEME == "light" else "#cbd5e1").pack(anchor="w", padx=px(10), pady=(px(18), px(8)))
+        CurvedNavRow(side, icon="🔑", name="Password Generator", hover_bg=HOVER, text_fg=TEXT,
+                     on_click=lambda: PassGenDialog(self.app, self.app).show()).pack(fill="x", pady=px(2))
+        CurvedNavRow(side, icon="🛡️", name="Security Audit", hover_bg=HOVER, text_fg=TEXT,
+                     on_click=lambda: self.set_filter(ATTENTION)).pack(fill="x", pady=px(2))
+        CurvedNavRow(side, icon="🔒", name="Lock Vault", hover_bg=HOVER, text_fg=TEXT,
+                     on_click=self.app.lock).pack(fill="x", pady=px(2))
+
+        # 3. SETTINGS
+        tk.Label(side, text="SETTINGS", font=(FONT, fs(10), "bold"), bg=BG, fg="#334155" if THEME == "light" else "#cbd5e1").pack(anchor="w", padx=px(10), pady=(px(18), px(8)))
+        CurvedNavRow(side, icon="⚙️", name="Account & Settings", hover_bg=HOVER, text_fg=TEXT,
+                     on_click=lambda: AccountDialog(self.app).show()).pack(fill="x", pady=px(2))
+
+        # Right Main Content Area
+        main_area = tk.Frame(body, bg=BG)
+        main_area.pack(side="left", fill="both", expand=True)
+
+        # Greeting Banner Row
+        greet_row = tk.Frame(main_area, bg=BG)
+        greet_row.pack(fill="x", pady=(0, px(8)))
+        greet_left = tk.Frame(greet_row, bg=BG)
+        greet_left.pack(side="left")
+        tk.Label(greet_left, text="DASHBOARD", font=(FONT, fs(10), "bold"), bg=BG, fg="#334155" if THEME == "light" else "#cbd5e1").pack(anchor="w")
+        tk.Label(greet_left, text="Good morning, Vault Master", font=(FONT, fs(16), "bold"), bg=BG, fg=TEXT).pack(anchor="w")
+
+        greet_right = tk.Frame(greet_row, bg=BG)
+        greet_right.pack(side="right", anchor="e")
+        self.stats_pill = tk.Label(greet_right, font=(FONT, fs(8), "bold"), bg=CARD, fg=MUTED,
+                                   highlightbackground=LINE, highlightthickness=1, padx=px(10), pady=px(3))
+        self.stats_pill.pack(side="right")
+
+        # Curved Search & Filter Banner (spacious, modern, prominent bar)
+        self.scard = RoundedCard(main_area, radius=14, height=px(58))
+        self.scard.pack(fill="x", pady=(0, px(12)))
+        self.scard.pack_propagate(False)
+
+        # Search Entry on Left (bigger padding and text)
+        sbox = tk.Frame(self.scard.inner, bg=FIELD_RO, highlightbackground=LINE, highlightthickness=1, padx=px(14), pady=px(6))
+        sbox.pack(side="left", fill="x", expand=True, padx=(px(10), px(14)), pady=px(7))
+        tk.Label(sbox, text="🔍", font=(FONT, fs(12)), bg=FIELD_RO, fg=MUTED).pack(side="left")
+        self.q = tk.StringVar()
+        self.search = tk.Entry(sbox, textvariable=self.q, font=(FONT, fs(11)), bg=FIELD_RO, fg=TEXT,
+                               relief="flat", borderwidth=0, insertbackground=PRIMARY)
+        self.search.pack(side="left", fill="x", expand=True, padx=(px(8), 0))
+        self._placeholder()
+
+        # Horizontal Category Filter Pills on Right
+        self.pills_container = tk.Frame(self.scard.inner, bg=CARD)
+        self.pills_container.pack(side="right", padx=(0, px(10)), pady=px(7))
+
+        # Main Items Area (Table Card + Detail Card)
+        content_row = tk.Frame(main_area, bg=BG)
+        content_row.pack(fill="both", expand=True)
+
+        # Center Table Card
+        table_card = RoundedCard(content_row, radius=12)
+        table_card.pack(side="left", fill="both", expand=True, padx=(0, px(10)))
+
+        tbl_hdr = tk.Frame(table_card.inner, bg=CARD)
+        tbl_hdr.pack(fill="x", padx=px(12), pady=(px(8), px(6)))
+        self.list_title = tk.Label(tbl_hdr, font=(FONT, fs(10), "bold"), bg=CARD, fg=TEXT)
+        self.list_title.pack(side="left")
+
+        tk.Frame(table_card.inner, bg=LINE, height=1).pack(fill="x")
+
+        tree_box = tk.Frame(table_card.inner, bg=CARD)
+        tree_box.pack(fill="both", expand=True)
+
+        self.tree = ttk.Treeview(tree_box, columns=("user", "site", "strength"), selectmode="browse")
+        for col, text, w in [("#0", "ITEM & TITLE", 180), ("user", "USERNAME / IDENTIFIER", 170),
+                             ("site", "WEBSITE", 130), ("strength", "PASSWORD", 110)]:
             self.tree.heading(col, text=text, anchor="w")
             self.tree.column(col, width=px(w), minwidth=px(60), anchor="w", stretch=col != "strength")
-        self.tree.tag_configure("weak", foreground=BAD_FG)
-        self.tree.tag_configure("group", foreground=MUTED, font=(FONT, fs(10), "bold"))
-        self.tree.pack(fill="both", expand=True)
+
+        # High contrast alternating row styling and crisp black text
+        row_even_bg = "#ffffff" if THEME == "light" else "#1e293b"
+        row_odd_bg = "#edf2f7" if THEME == "light" else "#0b1220"  # Noticeable contrast row separation
+        self.tree.tag_configure("row_even", background=row_even_bg, foreground=TEXT)
+        self.tree.tag_configure("row_odd", background=row_odd_bg, foreground=TEXT)
+        self.tree.tag_configure("group", foreground=TEXT, font=(FONT, fs(9), "bold"),
+                                background="#e2e8f0" if THEME == "light" else "#0f172a")
+
+        sb = ttk.Scrollbar(tree_box, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.tree.pack(side="left", fill="both", expand=True)
+
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
         self.tree.bind("<<TreeviewOpen>>", lambda e: self.collapsed.discard(self.tree.focus()))
         self.tree.bind("<<TreeviewClose>>", lambda e: self.collapsed.add(self.tree.focus()))
         self.tree.bind("<Double-1>", lambda e: self.edit())
         self.tree.bind("<Button-3>", self._context)
-        self.empty = ttk.Label(mid, style="CardMuted.TLabel", justify="center", font=(FONT, fs(11)))
+        self.empty = ttk.Label(tree_box, style="CardMuted.TLabel", justify="center", font=(FONT, fs(11)))
 
-        # Detail
-        self.detail = ttk.Frame(body, style="Card.TFrame", padding=18, width=px(340))
-        self.detail.pack(side="right", fill="y", before=mid)
-        self.detail.pack_propagate(False)
+        # Right Detail Card
+        self.detail_card = RoundedCard(content_row, radius=12, width=px(330))
+        self.detail_card.pack(side="right", fill="y")
+        self.detail_card.pack_propagate(False)
+        self.detail = self.detail_card.inner
+
+        # Bottom Feature Cards Row
+        bot_row = tk.Frame(main_area, bg=BG, height=px(86))
+        bot_row.pack(fill="x", pady=(px(10), 0))
+        bot_row.pack_propagate(False)
+
+        # 1. Quick Password Generator Card
+        self.pwgen_card = RoundedCard(bot_row, radius=12)
+        self.pwgen_card.pack(side="left", fill="both", expand=True, padx=(0, px(10)))
+        p_in = self.pwgen_card.inner
+
+        p_top = tk.Frame(p_in, bg=CARD)
+        p_top.pack(fill="x", padx=px(10), pady=(px(6), px(2)))
+        tk.Label(p_top, text="🔑", font=(FONT, fs(11)), bg=CARD).pack(side="left", padx=(0, px(4)))
+        tk.Label(p_top, text="Password Generator", font=(FONT, fs(9), "bold"), bg=CARD, fg=TEXT).pack(side="left")
+        tk.Label(p_top, text="— Random credentials in 1 click",
+                 font=(FONT, fs(8)), bg=CARD, fg=MUTED).pack(side="left", padx=(px(6), 0))
+
+        p_row = tk.Frame(p_in, bg=CARD)
+        p_row.pack(fill="x", padx=px(10), pady=(px(2), px(6)))
+
+        self._quick_pw = tk.StringVar(value=passgen.generate_password(16))
+        pw_box = tk.Frame(p_row, bg=FIELD_RO, highlightbackground=LINE, highlightthickness=1, padx=px(8), pady=px(3))
+        pw_box.pack(side="left", fill="x", expand=True)
+        self.quick_pw_entry = tk.Entry(pw_box, textvariable=self._quick_pw, font=("Consolas", fs(9), "bold"),
+                                       bg=FIELD_RO, fg=PRIMARY, relief="flat", borderwidth=0, state="readonly")
+        self.quick_pw_entry.pack(side="left", fill="x", expand=True)
+
+        ttk.Button(p_row, text="Copy", command=self._copy_quick_pw, style="Small.TButton").pack(side="left", padx=(px(6), 0))
+        ttk.Button(p_row, text="↻ New", command=self._new_quick_pw, style="Small.TButton").pack(side="left", padx=(px(4), 0))
+        ttk.Button(p_row, text="+ New Login", command=self._create_with_quick_pw, style="Small.TButton").pack(side="left", padx=(px(4), 0))
+
+        # 2. Vault Health Score Card
+        self.health_card = RoundedCard(bot_row, radius=12)
+        self.health_card.pack(side="right", fill="both", expand=True)
+        h_in = self.health_card.inner
+
+        h_top = tk.Frame(h_in, bg=CARD)
+        h_top.pack(fill="x", padx=px(10), pady=(px(6), px(2)))
+        tk.Label(h_top, text="🛡️", font=(FONT, fs(11)), bg=CARD).pack(side="left", padx=(0, px(4)))
+        tk.Label(h_top, text="Vault Health Score", font=(FONT, fs(9), "bold"), bg=CARD, fg=TEXT).pack(side="left")
+        self.health_score_badge = tk.Label(h_top, font=(FONT, fs(8), "bold"), bg=CARD)
+        self.health_score_badge.pack(side="right")
+
+        h_row = tk.Frame(h_in, bg=CARD)
+        h_row.pack(fill="x", padx=px(10), pady=(px(2), px(6)))
+        self.health_desc = tk.Label(h_row, font=(FONT, fs(8)), bg=CARD, fg=MUTED)
+        self.health_desc.pack(side="left")
+
+        self.health_btn = ttk.Button(h_row, text="Review weak passwords →",
+                                     command=lambda: self.set_filter(ATTENTION), style="Small.TButton")
+        self.health_btn.pack(side="right")
 
         self.q.trace_add("write", lambda *a: self.refresh())
         self.refresh()
 
+    def _copy_quick_pw(self):
+        pw = self._quick_pw.get()
+        if pw:
+            self.app.copy(pw, "Generated password")
+
+    def _new_quick_pw(self):
+        self._quick_pw.set(passgen.generate_password(16))
+
+    def _create_with_quick_pw(self):
+        EntryDialog(self.app, preset_password=self._quick_pw.get()).show()
+
     # ---- search placeholder
     def _placeholder(self):
-        ph = "Search by name, website or username"
+        ph = "Filter by name, username, or URL..."
         self.search.insert(0, ph)
-        self.search.configure(foreground=MUTED)
+        self.search.configure(fg=MUTED)
         self._ph_on = True
 
         def fin(_):
-            if self._ph_on:
+            if getattr(self, "_ph_on", False):
                 self._ph_on = False
                 self.search.delete(0, "end")
-                self.search.configure(foreground=TEXT)
+                self.search.configure(fg=TEXT)
 
         def fout(_):
             if not self.search.get():
                 self._ph_on = True
                 self.search.insert(0, ph)
-                self.search.configure(foreground=MUTED)
+                self.search.configure(fg=MUTED)
         self.search.bind("<FocusIn>", fin)
         self.search.bind("<FocusOut>", fout)
 
     def query(self) -> str:
-        return "" if self._ph_on else self.q.get().strip().lower()
+        return "" if getattr(self, "_ph_on", False) else self.q.get().strip().lower()
+
+    def dismiss_banner(self):
+        self._banner_dismissed = True
+        self.banner.pack_forget()
 
     # ---- data
     def attention_ids(self) -> set:
@@ -1562,18 +2279,23 @@ class HomeScreen(ttk.Frame):
             return
         attention = self.attention_ids()
 
-        # banner
-        if attention:
+        # Warning banner
+        if attention and not self._banner_dismissed:
             n = len(attention)
             self.banner_text.configure(
-                text=f"⚠  {n} of your saved passwords {'are' if n != 1 else 'is'} weak.")
-            self.banner.pack(fill="x", after=self.sep)
+                text=f"{n} of your saved passwords {'are' if n != 1 else 'is'} weak. Review and update them to keep accounts secure.")
+            self.banner.pack(fill="x", padx=px(16), pady=(px(8), 0), after=self.hdr_wrap)
         else:
             self.banner.pack_forget()
-            if self.filter == ATTENTION:
+            if self.filter == ATTENTION and not attention:
                 self.filter = ALL
 
-        # sidebar
+        # Stats pill in greeting row
+        total = len(v.items)
+        weak_n = len(attention)
+        self.stats_pill.configure(text=f"{total} items in vault · {weak_n} need attention")
+
+        # Sidebar category counts
         counts = {c: 0 for c in CATEGORIES}
         for m in v.items.values():
             counts[m.get("category", "Other")] = counts.get(m.get("category", "Other"), 0) + 1
@@ -1584,13 +2306,61 @@ class HomeScreen(ttk.Frame):
             self.cats.delete(0, "end")
             for k in self._cat_keys:
                 n = len(v.items) if k == ALL else len(attention) if k == ATTENTION else counts[k]
-                icon = "⚠ " if k == ATTENTION else ""
-                self.cats.insert("end", f"  {icon}{k}  ({n})")
-                if k == ATTENTION:
-                    self.cats.itemconfigure("end", foreground=WARN_FG)
-            self.cats.selection_set(self._cat_keys.index(self.filter))
+                icon = "⚠️" if k == ATTENTION else ""
+                self.cats.insert("end", f"{icon} {k} ({n})")
+            if self.filter in self._cat_keys:
+                self.cats.selection_set(self._cat_keys.index(self.filter))
 
-        # list
+        # Horizontal Filter Pills in search card
+        for w in self.pills_container.winfo_children():
+            w.destroy()
+
+        active_pill_bg = "#0f172a" if THEME == "light" else "#334155"
+
+        p_all = PillButton(self.pills_container, f"All ({total})",
+                           command=lambda: self.set_filter(ALL),
+                           is_active=(self.filter == ALL),
+                           active_bg=active_pill_bg,
+                           font=(FONT, fs(10), "bold"),
+                           padx=px(14), pady=px(6))
+        p_all.pack(side="left", padx=px(3))
+
+        if attention:
+            p_att = PillButton(self.pills_container, f"Needs attention ({weak_n})",
+                               command=lambda: self.set_filter(ATTENTION),
+                               is_active=(self.filter == ATTENTION),
+                               active_bg=BAD_FG,
+                               inactive_fg=WARN_FG,
+                               font=(FONT, fs(10), "bold"),
+                               padx=px(14), pady=px(6))
+            p_att.pack(side="left", padx=px(3))
+
+        shown_cats = [c for c in CATEGORIES if counts.get(c)][:4]
+        for c in shown_cats:
+            p_c = PillButton(self.pills_container, f"{c} ({counts[c]})",
+                             command=lambda cat=c: self.set_filter(cat),
+                             is_active=(self.filter == c),
+                             active_bg=active_pill_bg,
+                             font=(FONT, fs(10), "bold"),
+                             padx=px(14), pady=px(6))
+            p_c.pack(side="left", padx=px(3))
+
+        # Bottom Feature Card: Vault Health Score
+        if total == 0:
+            pct = 100
+        else:
+            pct = max(0, int(((total - weak_n) / total) * 100))
+
+        if pct >= 90:
+            self.health_score_badge.configure(text=f"{pct}%  Optimal", fg="#059669")
+            self.health_desc.configure(text="All passwords meet high security standards.")
+            self.health_btn.configure(text="Run security check →")
+        else:
+            self.health_score_badge.configure(text=f"{pct}%  Needs Attention", fg=BAD_FG)
+            self.health_desc.configure(text=f"{weak_n} weak password{'s' if weak_n != 1 else ''} detected. Keep accounts secure.")
+            self.health_btn.configure(text="Review weak passwords →")
+
+        # List rows
         q = self.query()
         rows = []
         for lid, m in v.items.items():
@@ -1603,34 +2373,46 @@ class HomeScreen(ttk.Frame):
                 continue
             rows.append((lid, m))
         rows.sort(key=lambda r: r[1]["name"].lower())
+
         self.tree.delete(*self.tree.get_children())
-        # Two or more shown logins on the same website go under one group row.
+        self._tree_avatars = {}
+
         sites = {lid: site_key(m.get("url", "")) for lid, m in rows}
         per_site = {}
         for s in sites.values():
             if s:
                 per_site[s] = per_site.get(s, 0) + 1
-        for lid, m in rows:
+
+        for idx, (lid, m) in enumerate(rows):
             parent = ""
             s = sites[lid]
             if per_site.get(s, 0) > 1:
                 parent = "grp:" + s
                 if not self.tree.exists(parent):
-                    self.tree.insert("", "end", iid=parent, text=f"\U0001F310 {s}",
+                    grp_av = get_service_avatar(s, size=20, radius=5)
+                    self._tree_avatars[parent] = grp_av
+                    self.tree.insert("", "end", iid=parent, text=f"  🌐  {s}", image=grp_av,
                                      values=(f"{per_site[s]} logins", "", ""),
                                      open=parent not in self.collapsed, tags=("group",))
             score = m.get("strength", 4)
             if passgen.is_weak(score):
-                st, tag = "⚠ " + passgen.LABELS[score], "weak"
+                st = "⚠️ " + passgen.LABELS[score]
+            elif score >= 4:
+                st = "✓ " + passgen.LABELS[score]
             else:
-                st, tag = passgen.LABELS[score], ""
-            name = m["name"] + ("  \U0001F511" if m.get("has_pin") else "")
-            self.tree.insert(parent, "end", iid=lid, text=name, values=(m.get("username", ""), m.get("url", ""), st),
-                             tags=(tag,))
+                st = passgen.LABELS[score]
+            name = m["name"] + ("  🔑" if m.get("has_pin") else "")
+            av = get_service_avatar(m["name"], size=20, radius=5)
+            self._tree_avatars[lid] = av
+            row_stripe = "row_even" if idx % 2 == 0 else "row_odd"
+            self.tree.insert(parent, "end", iid=lid, text="  " + name, image=av,
+                             values=(m.get("username", ""), m.get("url", ""), st),
+                             tags=(row_stripe,))
+
         self.list_title.configure(text=f"{self.filter}  ·  {len(rows)} shown")
 
         if not v.items:
-            self.empty.configure(text="No logins saved yet.\n\nClick “+ Add login” to save your first one,\n"
+            self.empty.configure(text="No logins saved yet.\n\nClick “+ Add New Item” to save your first one,\n"
                                       "or Import them from another app.")
             self.empty.place(relx=0.5, rely=0.4, anchor="center")
         elif not rows:
@@ -1641,7 +2423,7 @@ class HomeScreen(ttk.Frame):
 
         target = select or self.selected
         if target and self.tree.exists(target):
-            self.collapsed.discard(self.tree.parent(target))     # see() below unfolds its group
+            self.collapsed.discard(self.tree.parent(target))
             self.tree.selection_set(target)
             self.tree.see(target)
         else:
@@ -1666,59 +2448,96 @@ class HomeScreen(ttk.Frame):
             w.destroy()
         v = self.app.vault
         if not self.selected or self.selected not in v.items:
-            ttk.Label(d, text="Select a login to see its details.", style="CardMuted.TLabel",
-                      wraplength=px(290)).pack(anchor="w")
+            empty_frame = tk.Frame(d, bg=CARD, padx=px(16), pady=px(36))
+            empty_frame.pack(fill="both", expand=True)
+            tk.Label(empty_frame, text="🔑", font=(FONT, fs(26)), bg=CARD).pack(pady=(0, px(10)))
+            tk.Label(empty_frame, text="Select an item", font=(FONT, fs(12), "bold"), bg=CARD, fg=TEXT).pack()
+            tk.Label(empty_frame, text="Click a login from the list to view its credentials, copy passwords, or edit details.",
+                     font=(FONT, fs(9)), bg=CARD, fg=MUTED, wraplength=px(240), justify="center").pack(pady=(px(6), 0))
             return
+
         lid, m = self.selected, v.items[self.selected]
         sec = self.revealed[1] if self.revealed and self.revealed[0] == lid else None
 
-        top = ttk.Frame(d, style="Card.TFrame")
+        pad_wrap = tk.Frame(d, bg=CARD, padx=px(14), pady=px(12))
+        pad_wrap.pack(fill="both", expand=True)
+
+        # Header: Avatar + Title + Edit & Menu buttons
+        top = tk.Frame(pad_wrap, bg=CARD)
         top.pack(fill="x")
-        ttk.Label(top, text=m["name"], style="Big.TLabel", wraplength=px(170)).pack(side="left", anchor="w")
+
+        avatar = get_service_avatar(m["name"], size=36, radius=8)
+        self._detail_avatar = avatar
+        tk.Label(top, image=avatar, bg=CARD).pack(side="left", padx=(0, px(8)))
+
+        info_box = tk.Frame(top, bg=CARD)
+        info_box.pack(side="left", fill="x", expand=True)
+        tk.Label(info_box, text=m["name"], font=(FONT, fs(12), "bold"), bg=CARD, fg=TEXT,
+                 wraplength=px(150), justify="left").pack(anchor="w")
+        if m.get("url"):
+            tk.Label(info_box, text=m["url"], font=(FONT, fs(8)), bg=CARD, fg=MUTED,
+                     wraplength=px(150), justify="left").pack(anchor="w")
+
         more = ttk.Menubutton(top, text="⋯", width=3, style="More.TMenubutton")
         more.pack(side="right")
         more["menu"] = self._menu(more, lid)
-        ttk.Button(top, text="✎ Edit", command=self.edit).pack(side="right", padx=(0, 4))
-        sub = m.get("category", "Other") + ("   \U0001F511 Extra PIN" if m.get("has_pin") else "")
-        ttk.Label(d, text=sub, style="CardMuted.TLabel").pack(anchor="w", pady=(2, 14))
+        ttk.Button(top, text="✎ Edit", command=self.edit, style="Small.TButton").pack(side="right", padx=(0, px(4)))
+
+        # Category and lock pill badges
+        pill_row = tk.Frame(pad_wrap, bg=CARD)
+        pill_row.pack(anchor="w", pady=(px(8), px(12)))
+        cat_badge = tk.Frame(pill_row, bg=FIELD_RO, highlightbackground=LINE, highlightthickness=1, padx=px(8), pady=px(2))
+        cat_badge.pack(side="left")
+        tk.Label(cat_badge, text=m.get("category", "Other"), font=(FONT, fs(8), "bold"), bg=FIELD_RO, fg=MUTED).pack()
+        if m.get("has_pin"):
+            pin_badge = tk.Frame(pill_row, bg=PRIMARY_LIGHT, highlightbackground=PRIMARY_OFF, highlightthickness=1, padx=px(8), pady=px(2))
+            pin_badge.pack(side="left", padx=(px(6), 0))
+            tk.Label(pin_badge, text="🔒 PIN Protected", font=(FONT, fs(8), "bold"), bg=PRIMARY_LIGHT, fg=PRIMARY).pack()
 
         def field(label, value, buttons):
-            ttk.Label(d, text=label, style="CardMuted.TLabel").pack(anchor="w")
-            r = ttk.Frame(d, style="Card.TFrame")
-            r.pack(fill="x", pady=(0, 10))
-            ttk.Label(r, text=value or "—", style="Card.TLabel", font=(FONT, fs(11)), wraplength=px(180)).pack(
-                side="left")
+            f_box = tk.Frame(pad_wrap, bg=FIELD_RO, highlightbackground=LINE, highlightthickness=1, padx=px(10), pady=px(6))
+            f_box.pack(fill="x", pady=(0, px(8)))
+            top_r = tk.Frame(f_box, bg=FIELD_RO)
+            top_r.pack(fill="x")
+            tk.Label(top_r, text=label.upper(), font=(FONT, fs(7), "bold"), bg=FIELD_RO, fg=MUTED).pack(side="left")
+            val_r = tk.Frame(f_box, bg=FIELD_RO)
+            val_r.pack(fill="x", pady=(px(2), 0))
+            tk.Label(val_r, text=value or "—", font=(FONT, fs(9)), bg=FIELD_RO, fg=TEXT, wraplength=px(170), justify="left").pack(side="left")
             for text, cmd in reversed(buttons):
-                ttk.Button(r, text=text, command=cmd, width=6).pack(side="right", padx=(4, 0))
+                ttk.Button(val_r, text=text, command=cmd, style="Small.TButton").pack(side="right", padx=(px(4), 0))
 
         if m.get("url"):
             field("Website", m["url"], [("Open", lambda: self.open_site(m["url"]))])
         field("Username", m.get("username"),
               [("Copy", lambda: self.app.copy(m.get("username", ""), "Username"))] if m.get("username") else [])
-        field("Password", sec["password"] if sec else "•" * 10,
+        field("Password", sec["password"] if sec else "••••••••••••",
               [("Hide" if sec else "Show", self.toggle_reveal), ("Copy", self.copy_password)])
 
         score = m.get("strength", 4)
         if passgen.is_weak(score):
-            box = ttk.Frame(d, style="Warn.TFrame", padding=10)
-            box.pack(fill="x", pady=(0, 10))
+            box = tk.Frame(pad_wrap, bg=WARN_BG, highlightbackground=WARN_BORDER, highlightthickness=1, padx=px(10), pady=px(8))
+            box.pack(fill="x", pady=(0, px(8)))
             why = f"This password is {passgen.LABELS[score].lower()}."
-            ttk.Label(box, text="⚠ " + why, style="Warn.TLabel", wraplength=px(250)).pack(anchor="w")
-            ttk.Label(box, text="Change it on the website, then save the new one here. "
-                                "PassGen can make a strong one for you.", background=WARN_BG, foreground=WARN_FG,
-                      wraplength=px(250)).pack(anchor="w", pady=(4, 6))
-            ttk.Button(box, text="Update password…", command=lambda: self.edit(regenerate=True)).pack(anchor="w")
+            tk.Label(box, text="⚠ " + why, font=(FONT, fs(8), "bold"), bg=WARN_BG, fg=WARN_FG, wraplength=px(230), justify="left").pack(anchor="w")
+            tk.Label(box, text="Change it on the website, then save the new one here.", font=(FONT, fs(8)),
+                     bg=WARN_BG, fg=WARN_FG, wraplength=px(230), justify="left").pack(anchor="w", pady=(px(2), px(6)))
+            ttk.Button(box, text="Update password…", command=lambda: self.edit(regenerate=True), style="Small.TButton").pack(anchor="w")
         else:
-            ttk.Label(d, text="Password strength", style="CardMuted.TLabel").pack(anchor="w")
-            ttk.Label(d, text=passgen.LABELS[score], style="Card.TLabel", foreground=METER[score],
-                      font=(FONT, fs(10), "bold")).pack(anchor="w", pady=(0, 10))
+            meter_box = tk.Frame(pad_wrap, bg=FIELD_RO, highlightbackground=LINE, highlightthickness=1, padx=px(10), pady=px(6))
+            meter_box.pack(fill="x", pady=(0, px(8)))
+            tk.Label(meter_box, text="PASSWORD STRENGTH", font=(FONT, fs(7), "bold"), bg=FIELD_RO, fg=MUTED).pack(anchor="w")
+            score_lbl = tk.Label(meter_box, text=passgen.LABELS[score], font=(FONT, fs(9), "bold"), bg=FIELD_RO, fg=METER[score])
+            score_lbl.pack(anchor="w", pady=(px(2), 0))
 
         if sec and sec.get("notes"):
-            ttk.Label(d, text="Notes", style="CardMuted.TLabel").pack(anchor="w")
-            ttk.Label(d, text=sec["notes"], style="Card.TLabel", wraplength=px(290), justify="left").pack(anchor="w",
-                                                                                                    pady=(0, 10))
-        ttk.Label(d, text=f"Last updated {fmt_date(m.get('updated', 0))}", style="CardMuted.TLabel").pack(
-            side="bottom", anchor="w")
+            notes_box = tk.Frame(pad_wrap, bg=FIELD_RO, highlightbackground=LINE, highlightthickness=1, padx=px(10), pady=px(6))
+            notes_box.pack(fill="x", pady=(0, px(8)))
+            tk.Label(notes_box, text="NOTES", font=(FONT, fs(7), "bold"), bg=FIELD_RO, fg=MUTED).pack(anchor="w")
+            tk.Label(notes_box, text=sec["notes"], font=(FONT, fs(8)), bg=FIELD_RO, fg=TEXT, wraplength=px(230), justify="left").pack(anchor="w", pady=(px(2), 0))
+
+        footer = tk.Frame(pad_wrap, bg=CARD)
+        footer.pack(side="bottom", fill="x")
+        tk.Label(footer, text=f"Last updated {fmt_date(m.get('updated', 0))}", font=(FONT, fs(8)), bg=CARD, fg=MUTED).pack(anchor="w")
 
     def _menu(self, parent, lid):
         menu = tk.Menu(parent, tearoff=False, font=(FONT, fs(10)), bg=CARD, fg=TEXT,
@@ -1786,6 +2605,7 @@ class HomeScreen(ttk.Frame):
             self.app.status(f"“{m['name']}” deleted.")
 
 
+
 # ---------------------------------------------------------------- app shell
 class App(tk.Tk):
     def __init__(self, vault_path, demo_hint=""):
@@ -1805,8 +2625,11 @@ class App(tk.Tk):
         self._clip = None
         self.last_activity = time.monotonic()
 
-        self.statusbar = ttk.Label(self, padding=(12, 4), style="Muted.TLabel", anchor="w")
-        self.statusbar.pack(side="bottom", fill="x")
+        status_frame = tk.Frame(self, bg=CARD)
+        status_frame.pack(side="bottom", fill="x")
+        tk.Frame(status_frame, bg=LINE, height=1).pack(fill="x")
+        self.statusbar = tk.Label(status_frame, font=(FONT, fs(9)), bg=CARD, fg=MUTED, anchor="w", padx=px(16), pady=px(6))
+        self.statusbar.pack(fill="x")
         for ev in ("<Any-KeyPress>", "<Any-Button>", "<Motion>"):
             self.bind_all(ev, self._touch, add="+")
         self.protocol("WM_DELETE_WINDOW", self.quit_app)
@@ -1837,6 +2660,10 @@ class App(tk.Tk):
             if TEXT_SIZE != "normal":
                 self.state("zoomed")
         setup_styles(self)
+        if hasattr(self, "statusbar"):
+            self.statusbar.configure(font=(FONT, fs(9)), bg=CARD, fg=MUTED)
+            if self.statusbar.master:
+                self.statusbar.master.configure(bg=CARD)
         if self.vault:
             self.show(HomeScreen)
         if theme:
